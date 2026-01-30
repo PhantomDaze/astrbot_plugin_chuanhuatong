@@ -19,6 +19,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, register, StarTools
+from astrbot.core.message.message_event_result import MessageChain
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 try:
@@ -1233,6 +1234,47 @@ class ChuanHuaTongPlugin(Star):
         cleaned = "\n".join(cleaned_lines)
         return cleaned
 
+    def _remove_markdown_syntax(self, text: str) -> str:
+        """Remove common markdown syntax from text"""
+        if not text:
+            return text
+        
+        # Remove bold/italic: **text** or *text* or __text__ or _text_
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # **bold**
+        text = re.sub(r'\*(.+?)\*', r'\1', text)  # *italic*
+        text = re.sub(r'__(.+?)__', r'\1', text)  # __bold__
+        text = re.sub(r'_(.+?)_', r'\1', text)  # _italic_
+        
+        # Remove inline code: `code`
+        text = re.sub(r'`([^`]+)`', r'\1', text)
+        
+        # Remove code blocks: ```code```
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        
+        # Remove headers: # Header
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+        
+        # Remove links: [text](url)
+        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+        
+        # Remove images: ![alt](url)
+        text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', r'\1', text)
+        
+        # Remove strikethrough: ~~text~~
+        text = re.sub(r'~~(.+?)~~', r'\1', text)
+        
+        # Remove blockquotes: > text
+        text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+        
+        # Remove horizontal rules: --- or ***
+        text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+        
+        # Remove list markers: - item or * item or 1. item
+        text = re.sub(r'^[\s]*[-*+]\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^[\s]*\d+\.\s+', '', text, flags=re.MULTILINE)
+        
+        return text
+
     def _emotion_from_text(self, text: str) -> Tuple[str, str]:
         """从文本中提取情绪标签并返回清理后的文本"""
         mapping = self._emotion_meta()
@@ -1817,6 +1859,183 @@ class ChuanHuaTongPlugin(Star):
             return 0
         return len(text.replace("\r", "").replace("\n", "").strip())
 
+    def _smart_split_text(self, text: str, max_chars: int) -> list[str]:
+        """Smart split text into chunks by paragraph, sentence, or force split"""
+        if not text or len(text) <= max_chars:
+            return [text] if text else []
+        
+        chunks = []
+        paragraphs = text.split('\n\n')
+        current_chunk = ""
+        
+        for para in paragraphs:
+            test_chunk = current_chunk + ('\n\n' if current_chunk else '') + para
+            if len(test_chunk) <= max_chars:
+                current_chunk = test_chunk
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = ""
+                
+                if len(para) > max_chars:
+                    chunks.extend(self._sentence_split(para, max_chars))
+                else:
+                    current_chunk = para
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        return chunks
+
+    def _sentence_split(self, text: str, max_chars: int) -> list[str]:
+        """Split text by sentences"""
+        if not text or max_chars <= 0:
+            return [text] if text else []
+        
+        pattern = r'([。！？\n])\s*'
+        parts = re.split(pattern, text)
+        
+        chunks = []
+        current = ""
+        
+        i = 0
+        while i < len(parts):
+            sentence = parts[i]
+            punctuation = parts[i+1] if i+1 < len(parts) else ""
+            full_sentence = sentence + punctuation
+            
+            if len(current) + len(full_sentence) <= max_chars:
+                current += full_sentence
+            else:
+                if current:
+                    chunks.append(current.strip())
+                if len(full_sentence) > max_chars:
+                    chunks.extend(self._hard_split(full_sentence, max_chars))
+                    current = ""
+                else:
+                    current = full_sentence
+            
+            i += 2
+        
+        if current:
+            chunks.append(current.strip())
+        
+        return [c for c in chunks if c]
+
+    def _hard_split(self, text: str, max_chars: int) -> list[str]:
+        """Force split by character count"""
+        if not text or len(text) <= max_chars:
+            return [text] if text else []
+        return [text[i:i+max_chars] for i in range(0, len(text), max_chars)]
+
+    def _split_text_with_emotion(
+        self, 
+        text: str, 
+        max_chars: int, 
+        default_emotion: str
+    ) -> list[Tuple[str, str]]:
+        """Split text and assign emotions to each chunk"""
+        # Extract emotion positions from original text (before removing tags)
+        mapping = self._emotion_meta()
+        emotion_positions: list[Tuple[int, str]] = []
+        
+        for match in self.EMOTION_PATTERN.finditer(text):
+            emotion_key = match.group(1).lower()
+            if emotion_key in mapping:
+                emotion_positions.append((match.start(), emotion_key))
+        
+        clean_text = self._remove_emotion_tags(text)
+        
+        clean_text = self._remove_markdown_syntax(clean_text)
+        
+        # Normalize whitespace: remove excessive blank lines
+        clean_text = re.sub(r'\n{2,}', '\n', clean_text)
+        lines = clean_text.split('\n')
+        lines = [line.rstrip() for line in lines]
+        clean_text = '\n'.join(lines)
+        clean_text = clean_text.strip()
+        
+        # Split text
+        chunks = self._smart_split_text(clean_text, max_chars)
+        
+        # Assign emotions
+        result = []
+        current_emotion = default_emotion or next(iter(mapping.keys()), "neutral")
+        char_offset = 0
+        
+        for chunk in chunks:
+            chunk_start = char_offset
+            chunk_end = char_offset + len(chunk)
+            
+            # Find emotion tag in this chunk range
+            chunk_emotion = None
+            for pos, emo in emotion_positions:
+                if chunk_start <= pos < chunk_end:
+                    chunk_emotion = emo
+                    break
+            
+            if chunk_emotion:
+                current_emotion = chunk_emotion
+            
+            result.append((chunk, current_emotion))
+            char_offset = chunk_end
+        
+        return result
+
+    async def _render_split_text(
+        self,
+        text: str,
+        emotion: str,
+        event: AstrMessageEvent,
+        session_id: Optional[str] = None,
+    ) -> bool:
+        """Render and send split text chunks"""
+        char_limit = int(self.cfg().get("render_char_threshold", 60) or 0)
+        if char_limit <= 0:
+            char_limit = 200
+        
+        # Split text with emotion assignment
+        chunks_with_emotion = self._split_text_with_emotion(text, char_limit, emotion)
+        
+        if len(chunks_with_emotion) <= 1:
+            # Single chunk, render normally
+            image_path = await self._render_with_fallback(text, emotion, session_id)
+            if image_path:
+                chain = MessageChain()
+                chain.file_image(image_path)
+                await event.send(chain)
+                self._schedule_cleanup(image_path, delay=90.0)
+                return True
+            return False
+        
+        # Render multiple chunks
+        logger.info("[传话筒] 分割文本为 %s 个片段进行渲染", len(chunks_with_emotion))
+        success_count = 0
+        
+        for idx, (chunk_text, chunk_emotion) in enumerate(chunks_with_emotion, 1):
+            try:
+                image_path = await self._render_with_fallback(chunk_text, chunk_emotion, session_id)
+                if image_path:
+                    chain = MessageChain()
+                    chain.file_image(image_path)
+                    await event.send(chain)
+                    self._schedule_cleanup(image_path, delay=90.0)
+                    success_count += 1
+                else:
+                    chain = MessageChain()
+                    chain.message(f"[第{idx}段]\n{chunk_text}")
+                    await event.send(chain)
+            except Exception as exc:
+                logger.error("[传话筒] 渲染第 %s 段失败: %s", idx, exc)
+                try:
+                    chain = MessageChain()
+                    chain.message(f"[第{idx}段]\n{chunk_text}")
+                    await event.send(chain)
+                except Exception:
+                    logger.debug("[传话筒] 发送降级文本也失败", exc_info=True)
+        
+        return success_count > 0
+
     def _parse_rgba(self, value: str) -> tuple[int, int, int, int]:
         value = (value or "").strip().lower()
         if value.startswith("rgba"):
@@ -2363,12 +2582,23 @@ class ChuanHuaTongPlugin(Star):
                 
                 # 检查字符限制
                 char_limit = int(self.cfg().get("render_char_threshold", 60) or 0)
+                enable_split = self._cfg_bool("split_long_text", False)
+                
                 if char_limit > 0:
                     text_len = self._count_visible_chars(full_text)
                     if text_len > char_limit:
-                        logger.info("[传话筒] 文本长度 %s 超过阈值 %s，跳过渲染，返回清洗后的文本", text_len, char_limit)
-                        # 此时 result.chain 已经是清洗后的文本，直接返回
-                        return
+                        if enable_split:
+                            logger.info("[传话筒] 文本长度 %s 超过阈值 %s，启用分割渲染", text_len, char_limit)
+                            success = await self._render_split_text(full_text, emotion, event, session_id)
+                            if success:
+                                result.chain = []
+                                logger.info("[传话筒] 分割渲染完成，会话: %s", session_id)
+                                return
+                            logger.warning("[传话筒] 分割渲染失败，返回清洗后的文本，会话: %s", session_id)
+                            return
+                        else:
+                            logger.info("[传话筒] 文本长度 %s 超过阈值 %s，跳过渲染，返回清洗后的文本", text_len, char_limit)
+                            return
                 
                 # 第四步：尝试渲染，如果成功则替换为图片，失败则保持清洗后的文本
                 logger.debug("[传话筒] 开始渲染图片，会话: %s", session_id)

@@ -13,8 +13,14 @@
 
   "render_char_threshold": {
     "type": "int",
-    "description": "渲染字符阈值（0 为不限制，超过阈值则直接发送纯文本）",
+    "description": "渲染字符阈值（0 为不限制，超过阈值则直接发送纯文本或分割渲染）",
     "default": 60
+  },
+
+  "split_long_text": {
+    "type": "bool",
+    "description": "启用超长文本智能分割渲染（超过阈值时自动分割为多张图片）",
+    "default": false
   },
 
   "image_type": {
