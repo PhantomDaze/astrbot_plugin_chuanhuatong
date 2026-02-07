@@ -23,10 +23,22 @@
     "default": false
   },
 
-  "image_type": {
-    "type": "string",
-    "description": "渲染输出格式，png 或 jpeg",
-    "default": "png"
+  "merge_split_images": {
+    "type": "bool",
+    "description": "合并分割渲染的图片为一张（需启用超长文本智能分割渲染）",
+    "default": true
+  },
+
+  "merge_max_images": {
+    "type": "int",
+    "description": "每批最多合并几张图片（默认5张）",
+    "default": 5
+  },
+
+  "image_quality": {
+    "type": "int",
+    "description": "JPEG图片质量（1-100，默认85）",
+    "default": 85
   },
 
   "font_path": {

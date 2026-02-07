@@ -1536,10 +1536,6 @@ class ChuanHuaTongPlugin(Star):
         name = str(name or "传话筒").strip()
         return name or "传话筒"
 
-    def _image_type(self) -> str:
-        t = str(self.cfg().get("image_type", "png")).lower()
-        return "jpeg" if t == "jpeg" else "png"
-
     async def _render_with_fallback(self, text: str, emotion: str, session_id: Optional[str] = None) -> Optional[str]:
         try:
             return await asyncio.to_thread(self._render_pillow_panel, text, emotion, session_id)
@@ -1624,8 +1620,12 @@ class ChuanHuaTongPlugin(Star):
             elif kind == "image":
                 self._draw_overlay_image(canvas, layer.get("overlay"))
 
-        tmp = tempfile.NamedTemporaryFile(prefix="tranhua_", suffix=".png", delete=False)
-        canvas.convert("RGB").save(tmp.name, format="PNG")
+        # Save as JPEG with compression
+        tmp = tempfile.NamedTemporaryFile(prefix="tranhua_", suffix=".jpeg", delete=False)
+        quality = int(self.cfg().get("image_quality", 85) or 85)
+        quality = max(1, min(100, quality))
+        canvas.convert("RGB").save(tmp.name, format="JPEG", quality=quality, optimize=False)
+        
         return tmp.name
 
     def _draw_character_layer(self, canvas: Image.Image, path: Optional[str], layout: Dict[str, Any]):
@@ -1982,6 +1982,20 @@ class ChuanHuaTongPlugin(Star):
         
         return result
 
+    async def _send_fallback_texts(
+        self,
+        fallback_texts: list[Tuple[int, str]],
+        event: AstrMessageEvent
+    ) -> None:
+        """Send fallback texts when image rendering fails"""
+        for idx, chunk_text in fallback_texts:
+            try:
+                chain = MessageChain()
+                chain.message(f"{chunk_text}\n")
+                await event.send(chain)
+            except Exception:
+                logger.debug("[传话筒] 发送降级文本失败", exc_info=True)
+
     async def _render_split_text(
         self,
         text: str,
@@ -2008,33 +2022,157 @@ class ChuanHuaTongPlugin(Star):
                 return True
             return False
         
-        # Render multiple chunks
+        # Render multiple chunks (sequential)
         logger.info("[传话筒] 分割文本为 %s 个片段进行渲染", len(chunks_with_emotion))
-        success_count = 0
+        
+        # Collect rendered images
+        rendered_images: list[str] = []
+        fallback_texts: list[Tuple[int, str]] = []
         
         for idx, (chunk_text, chunk_emotion) in enumerate(chunks_with_emotion, 1):
             try:
                 image_path = await self._render_with_fallback(chunk_text, chunk_emotion, session_id)
                 if image_path:
-                    chain = MessageChain()
-                    chain.file_image(image_path)
-                    await event.send(chain)
-                    self._schedule_cleanup(image_path, delay=90.0)
-                    success_count += 1
+                    rendered_images.append(image_path)
                 else:
-                    chain = MessageChain()
-                    chain.message(f"[第{idx}段]\n{chunk_text}")
-                    await event.send(chain)
+                    fallback_texts.append((idx, chunk_text))
             except Exception as exc:
                 logger.error("[传话筒] 渲染第 %s 段失败: %s", idx, exc)
-                try:
-                    chain = MessageChain()
-                    chain.message(f"[第{idx}段]\n{chunk_text}")
-                    await event.send(chain)
-                except Exception:
-                    logger.debug("[传话筒] 发送降级文本也失败", exc_info=True)
+                fallback_texts.append((idx, chunk_text))
         
-        return success_count > 0
+        if not rendered_images:
+            # All renders failed, send fallback texts
+            await self._send_fallback_texts(fallback_texts, event)
+            return False
+        
+        # Check if merge is enabled
+        enable_merge = self._cfg_bool("merge_split_images", True)
+        
+        if enable_merge and len(rendered_images) > 1:
+            # Get max images per merge batch
+            max_per_batch = int(self.cfg().get("merge_max_images", 5) or 5)
+            if max_per_batch <= 0:
+                max_per_batch = 5
+            
+            # Split into batches
+            batches = [
+                rendered_images[i:i + max_per_batch]
+                for i in range(0, len(rendered_images), max_per_batch)
+            ]
+            
+            logger.info("[传话筒] 分 %s 批合并图片（每批最多 %s 张）", len(batches), max_per_batch)
+            
+            success_count = 0
+            for batch_idx, batch in enumerate(batches, 1):
+                if len(batch) == 1:
+                    # Single image in batch, send directly
+                    chain = MessageChain()
+                    chain.file_image(batch[0])
+                    await event.send(chain)
+                    self._schedule_cleanup(batch[0], delay=90.0)
+                    success_count += 1
+                else:
+                    # Merge batch
+                    merged_path = await asyncio.to_thread(self._merge_images_vertical, batch)
+                    
+                    if merged_path:
+                        chain = MessageChain()
+                        chain.file_image(merged_path)
+                        await event.send(chain)
+                        
+                        for path in batch:
+                            self._schedule_cleanup(path, delay=5.0)
+                        self._schedule_cleanup(merged_path, delay=90.0)
+                        success_count += 1
+                    else:
+                        logger.warning("[传话筒] 第 %s 批合并失败，逐张发送", batch_idx)
+                        for path in batch:
+                            chain = MessageChain()
+                            chain.file_image(path)
+                            await event.send(chain)
+                            self._schedule_cleanup(path, delay=90.0)
+                        success_count += 1
+            
+            # Send fallback texts if any
+            await self._send_fallback_texts(fallback_texts, event)
+            
+            logger.info("[传话筒] 合并图片发送完成")
+            return success_count > 0
+        
+        # Fallback: send images one by one
+        for image_path in rendered_images:
+            chain = MessageChain()
+            chain.file_image(image_path)
+            await event.send(chain)
+            self._schedule_cleanup(image_path, delay=90.0)
+        
+        # Send fallback texts
+        await self._send_fallback_texts(fallback_texts, event)
+        
+        return len(rendered_images) > 0
+
+    def _merge_images_vertical(
+        self,
+        image_paths: list[str],
+        gap: int = 10,
+        background_color: Optional[str] = None
+    ) -> Optional[str]:
+        """Merge multiple images vertically into one image (optimized)"""
+        if not image_paths:
+            return None
+        
+        if len(image_paths) == 1:
+            return image_paths[0]
+        
+        images = []
+        try:
+            # Open images without converting to RGBA immediately
+            for p in image_paths:
+                images.append(Image.open(p))
+            
+            max_width = max(img.width for img in images)
+            total_height = sum(img.height for img in images) + gap * (len(images) - 1)
+            
+            # Use RGB mode for JPEG output (faster, no alpha)
+            if background_color:
+                bg_color = self._hex_or_rgba(background_color)[:3]
+            else:
+                bg_color = (0, 0, 0)
+            
+            merged = Image.new("RGB", (max_width, total_height), bg_color)
+            
+            y_offset = 0
+            for img in images:
+                # Convert to RGB if necessary
+                if img.mode != "RGB":
+                    img_converted = img.convert("RGB")
+                else:
+                    img_converted = img
+                
+                x_offset = (max_width - img_converted.width) // 2
+                merged.paste(img_converted, (x_offset, y_offset))
+                y_offset += img.height + gap
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpeg") as f:
+                out_path = f.name
+            
+            # Save as JPEG with compression
+            quality = int(self.cfg().get("image_quality", 85) or 85)
+            quality = max(1, min(100, quality))
+            merged.save(out_path, "JPEG", quality=quality, optimize=False)
+            
+            logger.debug("[传话筒] 图片合并完成: %s 张 -> %s", len(images), out_path)
+            return out_path
+            
+        except Exception as exc:
+            logger.error("[传话筒] 图片合并失败: %s", exc)
+            return None
+        finally:
+            for img in images:
+                try:
+                    img.close()
+                except Exception:
+                    pass
 
     def _parse_rgba(self, value: str) -> tuple[int, int, int, int]:
         value = (value or "").strip().lower()
