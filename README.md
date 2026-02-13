@@ -5,7 +5,7 @@
 
 ## 公网环境请注意配置token！  点个star谢谢喵
 ## ✨预设市场： https://bvzrays.xyz （已被拿下，从下面下载吧）✨
-> **当前版本：v2.2.0 反馈群：870543663**
+> **当前版本：v2.3.0 BUG反馈群：870543663**
 
 
 ![views](https://count.getloli.com/get/@astrbotchuanhuatong?theme=booru-jaypee)
@@ -321,6 +321,9 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
   - `admin` - 仅框架管理员
   - `admin_or_group_admin` - 框架管理员或群管理（默认）
 
+### v2.3.0
+- **长文本分段渲染**：长文本会分段渲染为多个图片，并有合并转发配置
+- **BUG修复**：标签清洗修复
 
 ### v2.0.0
 - **立绘显示方式**：新增“固定宽度 / 统一高度 + 同底/顶部偏移”配置，解决像素不一导致的差分尺寸不一致的问题
