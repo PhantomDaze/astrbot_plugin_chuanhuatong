@@ -2278,22 +2278,11 @@ class ChuanHuaTongPlugin(Star):
         if provided != token:
             raise web.HTTPUnauthorized(text=json.dumps({"message": "Token mismatch"}), content_type="application/json")
 
-async def _handle_web_index(self, request: web.Request):
-    await self._authorize(request)
-    if not self.WEB_INDEX_PATH.exists():
-        return web.Response(text="WebUI 索引缺失，请重新部署。", status=404)
-    
-    # 强制读取文件内容并手动构造 Response
-    content = self.WEB_INDEX_PATH.read_text(encoding="utf-8")
-    return web.Response(
-        text=content, 
-        content_type="text/html",
-        charset="utf-8",
-        headers={
-            "Server": "AstrBot-ChuanHuaTong",
-            "Cache-Control": "no-cache"
-        }
-    )
+    async def _handle_web_index(self, request: web.Request):
+        await self._authorize(request)
+        if not self.WEB_INDEX_PATH.exists():
+            return web.Response(text="WebUI 索引缺失，请重新部署。", content_type="text/plain")
+        return web.FileResponse(path=self.WEB_INDEX_PATH)
 
     async def _handle_get_layout(self, request: web.Request):
         await self._authorize(request)
