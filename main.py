@@ -345,13 +345,291 @@ class ChuanHuaTongPlugin(Star):
         val = self.cfg().get(key, default)
         return bool(val) if not isinstance(val, str) else val.lower() in {"1", "true", "yes", "on"}
 
-    def _layout(self, session_id: Optional[str] = None) -> Dict[str, Any]:
-        """获取布局配置，优先返回会话特定配置，否则返回全局配置"""
+    def _layout(
+        self,
+        session_id: Optional[str] = None,
+        persona_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get the effective layout: session preset first, then persona preset, then global layout."""
         if session_id:
             session_layout = self._load_session_layout(session_id)
             if session_layout:
                 return copy.deepcopy(session_layout)
+        if persona_id:
+            preset_record = self._resolve_persona_preset_record(persona_id)
+            if preset_record:
+                layout = copy.deepcopy(preset_record["layout"])
+                layout["_preset_name"] = preset_record.get("name") or ""
+                layout["_preset_slug"] = preset_record.get("slug") or ""
+                layout["_preset_source"] = "persona"
+                layout["_persona_id"] = self._normalize_persona_ref(persona_id)
+                return layout
         return copy.deepcopy(self._layout_state)
+
+    def _persona_preset_config_key(self) -> str:
+        return "persona_preset_bindings"
+
+    def _load_persona_preset_bindings(self) -> dict[str, dict[str, Any]]:
+        raw: Any = self.cfg().get(self._persona_preset_config_key(), [])
+        raw_bindings: Any = raw
+        if isinstance(raw, dict):
+            raw_bindings = raw.get("bindings") if "bindings" in raw else raw
+
+        bindings: dict[str, dict[str, Any]] = {}
+        if isinstance(raw_bindings, list):
+            for entry in raw_bindings:
+                if not isinstance(entry, dict):
+                    continue
+                persona_key = self._normalize_persona_ref(entry.get("persona_id") or entry.get("persona") or entry.get("id"))
+                if not persona_key:
+                    continue
+                name = str(entry.get("name") or "").strip()
+                slug = str(entry.get("slug") or "").strip()
+                if not name and not slug:
+                    continue
+                bindings[persona_key] = {"name": name, "slug": slug}
+        elif isinstance(raw_bindings, dict):
+            for persona_id, preset in raw_bindings.items():
+                persona_key = self._normalize_persona_ref(persona_id)
+                if not persona_key:
+                    continue
+                if isinstance(preset, dict):
+                    name = str(preset.get("name") or "").strip()
+                    slug = str(preset.get("slug") or "").strip()
+                else:
+                    name = str(preset or "").strip()
+                    slug = ""
+                if not name and not slug:
+                    continue
+                bindings[persona_key] = {"name": name, "slug": slug}
+
+        legacy_file = self._data_dir / "persona_presets.json"
+        if not bindings and legacy_file.exists():
+            try:
+                data = json.loads(legacy_file.read_text(encoding="utf-8"))
+                legacy_bindings = data.get("bindings") if isinstance(data, dict) else data
+                if isinstance(legacy_bindings, list):
+                    for entry in legacy_bindings:
+                        if not isinstance(entry, dict):
+                            continue
+                        persona_key = self._normalize_persona_ref(entry.get("persona_id") or entry.get("persona") or entry.get("id"))
+                        if not persona_key:
+                            continue
+                        name = str(entry.get("name") or "").strip()
+                        slug = str(entry.get("slug") or "").strip()
+                        if not name and not slug:
+                            continue
+                        bindings[persona_key] = {"name": name, "slug": slug}
+                elif isinstance(legacy_bindings, dict):
+                    for persona_id, preset in legacy_bindings.items():
+                        persona_key = self._normalize_persona_ref(persona_id)
+                        if not persona_key:
+                            continue
+                        if isinstance(preset, dict):
+                            name = str(preset.get("name") or "").strip()
+                            slug = str(preset.get("slug") or "").strip()
+                        else:
+                            name = str(preset or "").strip()
+                            slug = ""
+                        if not name and not slug:
+                            continue
+                        bindings[persona_key] = {"name": name, "slug": slug}
+                if bindings:
+                    self._save_persona_preset_bindings(bindings)
+            except Exception:
+                logger.debug("[传话筒] 读取旧版人格预设绑定失败", exc_info=True)
+        return bindings
+
+    def _save_persona_preset_bindings(self, bindings: dict[str, dict[str, Any]]):
+        try:
+            payload_bindings: list[dict[str, Any]] = []
+            for persona_id in sorted(bindings.keys()):
+                entry = bindings.get(persona_id) or {}
+                cleaned_entry = {
+                    "persona_id": str(persona_id).strip(),
+                    "name": str(entry.get("name") or "").strip(),
+                    "slug": str(entry.get("slug") or "").strip(),
+                }
+                cleaned_entry = {k: v for k, v in cleaned_entry.items() if v}
+                if cleaned_entry.get("persona_id"):
+                    payload_bindings.append(cleaned_entry)
+            payload: list[dict[str, Any]] = payload_bindings
+            if isinstance(self._cfg_obj, AstrBotConfig):
+                self._cfg_obj[self._persona_preset_config_key()] = payload
+                if hasattr(self._cfg_obj, "save_config"):
+                    try:
+                        self._cfg_obj.save_config()
+                    except Exception:
+                        pass
+            elif isinstance(self._cfg_obj, dict):
+                self._cfg_obj[self._persona_preset_config_key()] = payload
+        except Exception as exc:
+            logger.error("[传话筒] 保存人格预设绑定失败: %s", exc)
+
+    def _normalize_persona_ref(self, persona_ref: str | None) -> str:
+        return str(persona_ref or "").strip()
+
+    def _get_persona_manager_record(self, persona_ref: str) -> Any:
+        persona_key = self._normalize_persona_ref(persona_ref)
+        if not persona_key:
+            return None
+        persona_mgr = getattr(self.context, "persona_manager", None)
+        if persona_mgr is None:
+            return None
+        getter = getattr(persona_mgr, "get_persona_v3_by_id", None)
+        if callable(getter):
+            try:
+                persona = getter(persona_key)
+                if persona:
+                    return persona
+            except Exception:
+                logger.debug("[传话筒] 通过 ID 读取人格失败: %s", persona_key, exc_info=True)
+        personas = getattr(persona_mgr, "personas_v3", None) or []
+        for persona in personas:
+            try:
+                if isinstance(persona, dict):
+                    candidate_id = str(persona.get("persona_id") or "").strip()
+                    candidate_name = str(persona.get("name") or "").strip()
+                else:
+                    candidate_id = str(getattr(persona, "persona_id", "") or "").strip()
+                    candidate_name = str(getattr(persona, "name", "") or "").strip()
+                if persona_key in {candidate_id, candidate_name}:
+                    return persona
+            except Exception:
+                continue
+        return None
+
+    def _persona_display_name(self, persona_ref: str | None) -> str:
+        persona_key = self._normalize_persona_ref(persona_ref)
+        if not persona_key:
+            return ""
+        persona = self._get_persona_manager_record(persona_key)
+        if persona is None:
+            return persona_key
+        try:
+            if isinstance(persona, dict):
+                return str(persona.get("name") or persona.get("persona_id") or persona_key)
+            return str(getattr(persona, "name", None) or getattr(persona, "persona_id", None) or persona_key)
+        except Exception:
+            return persona_key
+
+    def _normalize_persona_binding_id(self, persona_ref: str | None) -> str:
+        persona_key = self._normalize_persona_ref(persona_ref)
+        if not persona_key:
+            return ""
+        if persona_key in {"default", "_chatui_default_"}:
+            return persona_key
+        persona = self._get_persona_manager_record(persona_key)
+        if persona is None:
+            return persona_key
+        try:
+            if isinstance(persona, dict):
+                return str(persona.get("persona_id") or persona_key).strip() or persona_key
+            return str(getattr(persona, "persona_id", None) or persona_key).strip() or persona_key
+        except Exception:
+            return persona_key
+
+    def _resolve_persona_preset_record(self, persona_ref: str | None) -> Optional[Dict[str, Any]]:
+        persona_key = self._normalize_persona_binding_id(persona_ref)
+        if not persona_key:
+            return None
+        bindings = self._load_persona_preset_bindings()
+        binding = bindings.get(persona_key)
+        if not binding:
+            return None
+        candidate = str(binding.get("slug") or binding.get("name") or "").strip()
+        if not candidate:
+            return None
+        record = self._load_preset(candidate)
+        if record:
+            return record
+        fallback_name = str(binding.get("name") or "").strip()
+        if fallback_name and fallback_name != candidate:
+            return self._load_preset(fallback_name)
+        return None
+
+    def _set_persona_preset_binding(self, persona_ref: str, preset_identifier: str) -> tuple[bool, str, Optional[str]]:
+        persona_key = self._normalize_persona_binding_id(persona_ref)
+        if not persona_key:
+            return False, "请提供有效的人格 ID。", None
+        record = self._load_preset(preset_identifier)
+        if not record:
+            return False, f"未找到名为「{preset_identifier}」的预设。", None
+        bindings = self._load_persona_preset_bindings()
+        bindings[persona_key] = {"name": record.get("name") or preset_identifier, "slug": record.get("slug") or ""}
+        self._save_persona_preset_bindings(bindings)
+        return True, f"已将人格「{self._persona_display_name(persona_key)}」绑定到预设「{record.get('name') or preset_identifier}」。", record.get("name") or preset_identifier
+
+    def _clear_persona_preset_binding(self, persona_ref: str) -> tuple[bool, str]:
+        persona_key = self._normalize_persona_binding_id(persona_ref)
+        if not persona_key:
+            return False, "请提供有效的人格 ID。"
+        bindings = self._load_persona_preset_bindings()
+        if persona_key not in bindings:
+            return False, f"人格「{self._persona_display_name(persona_key)}」当前没有绑定预设。"
+        bindings.pop(persona_key, None)
+        self._save_persona_preset_bindings(bindings)
+        return True, f"已解除人格「{self._persona_display_name(persona_key)}」的预设绑定。"
+
+    def _format_persona_preset_bindings_message(self) -> str:
+        bindings = self._load_persona_preset_bindings()
+        lines = ["人格预设绑定："]
+        if not bindings:
+            lines.append("暂未绑定任何人格预设。")
+            lines.append("用法：/人格预设绑定 <人格ID> <预设名>")
+            return "\n".join(lines)
+        for idx, persona_id in enumerate(sorted(bindings.keys()), start=1):
+            entry = bindings.get(persona_id) or {}
+            preset_name = str(entry.get("name") or entry.get("slug") or "").strip() or "未命名预设"
+            lines.append(f"{idx}. {self._persona_display_name(persona_id)} -> {preset_name}")
+        lines.append("用法：/人格预设绑定 <人格ID> <预设名>；/人格预设解绑 <人格ID>")
+        return "\n".join(lines)
+
+    async def _resolve_current_persona_id(
+        self,
+        event: AstrMessageEvent,
+        request: Optional[ProviderRequest] = None,
+    ) -> str:
+        persona_id = ""
+        try:
+            conversation_persona_id = None
+            if request and getattr(request, "conversation", None):
+                conversation_persona_id = getattr(request.conversation, "persona_id", None)
+            if conversation_persona_id is None:
+                curr_cid = await self.context.conversation_manager.get_curr_conversation_id(event.unified_msg_origin)
+                if curr_cid:
+                    conversation = await self.context.conversation_manager.get_conversation(
+                        event.unified_msg_origin,
+                        curr_cid,
+                    )
+                    if conversation:
+                        conversation_persona_id = getattr(conversation, "persona_id", None)
+            persona_mgr = getattr(self.context, "persona_manager", None)
+            if persona_mgr is not None:
+                resolver = getattr(persona_mgr, "resolve_selected_persona", None)
+                if callable(resolver):
+                    provider_settings = (
+                        self.context.get_config(umo=event.unified_msg_origin).get("provider_settings", {})
+                        or {}
+                    )
+                    resolved = await resolver(
+                        umo=event.unified_msg_origin,
+                        conversation_persona_id=conversation_persona_id,
+                        platform_name=event.get_platform_name(),
+                        provider_settings=provider_settings,
+                    )
+                    if isinstance(resolved, (tuple, list)) and resolved:
+                        persona_id = str(resolved[0] or "").strip()
+                        if len(resolved) >= 4 and resolved[3]:
+                            persona_id = "_chatui_default_"
+            if not persona_id and conversation_persona_id:
+                persona_id = str(conversation_persona_id).strip()
+        except Exception:
+            logger.debug("[传话筒] 解析当前人格失败", exc_info=True)
+        return persona_id
+
+    def _persona_id_for_binding(self, persona_id: str) -> str:
+        return self._normalize_persona_binding_id(persona_id)
 
     def _session_layout_file(self, session_id: str) -> Path:
         """获取会话布局文件路径"""
@@ -641,31 +919,6 @@ class ChuanHuaTongPlugin(Star):
 
     def _current_preset_name(self) -> str:
         return str(self._current_preset_meta.get("name") or "")
-
-    def _format_preset_list_message(self) -> str:
-        presets = self._list_presets()
-        current_name = self._current_preset_name()
-        current_slug = str(self._current_preset_meta.get("slug") or "")
-        lines: list[str] = []
-        if current_name:
-            lines.append(f"当前预设：{current_name}")
-        else:
-            lines.append("当前预设：自定义布局（未绑定预设）")
-        if not presets:
-            lines.append("暂未保存任何预设。")
-            return "\n".join(lines)
-        lines.append("可用预设：")
-        for idx, info in enumerate(presets, start=1):
-            name = info.get("name") or info.get("slug") or f"未命名-{idx}"
-            saved = info.get("saved_at") or "未知时间"
-            marker = ""
-            if current_name and (info.get("name") == current_name):
-                marker = " <- 当前"
-            elif current_slug and (info.get("slug") == current_slug):
-                marker = " <- 当前"
-            lines.append(f"{idx}. {name}（保存于 {saved}）{marker}")
-        lines.append("使用 /切换预设 预设名称 即可切换。")
-        return "\n".join(lines)
 
     @staticmethod
     def _is_event_admin(event: AstrMessageEvent) -> bool:
@@ -1536,11 +1789,17 @@ class ChuanHuaTongPlugin(Star):
         name = str(name or "传话筒").strip()
         return name or "传话筒"
 
-    async def _render_with_fallback(self, text: str, emotion: str, session_id: Optional[str] = None) -> Optional[str]:
+    async def _render_with_fallback(
+        self,
+        text: str,
+        emotion: str,
+        session_id: Optional[str] = None,
+        persona_id: Optional[str] = None,
+    ) -> Optional[str]:
         try:
-            return await asyncio.to_thread(self._render_pillow_panel, text, emotion, session_id)
+            return await asyncio.to_thread(self._render_pillow_panel, text, emotion, session_id, persona_id)
         except Exception as exc:
-            logger.error("[传话筒] Pillow 合成失败: %s", exc)
+            logger.debug("[传话筒] Pillow 渲染失败: %s", exc, exc_info=True)
             return None
 
     def _cleanup_temp_file(self, path: Optional[str]):
@@ -1576,8 +1835,14 @@ class ChuanHuaTongPlugin(Star):
 
         task.add_done_callback(_remove)
 
-    def _render_pillow_panel(self, text: str, emotion: str, session_id: Optional[str] = None) -> Optional[str]:
-        layout = self._layout(session_id)
+    def _render_pillow_panel(
+        self,
+        text: str,
+        emotion: str,
+        session_id: Optional[str] = None,
+        persona_id: Optional[str] = None,
+    ) -> Optional[str]:
+        layout = self._layout(session_id, persona_id)
         width = int(layout.get("canvas_width", 1280))
         height = int(layout.get("canvas_height", 720))
         bg_color = self._hex_or_rgba(layout.get("background_color", "#05060A"))
@@ -2002,6 +2267,7 @@ class ChuanHuaTongPlugin(Star):
         emotion: str,
         event: AstrMessageEvent,
         session_id: Optional[str] = None,
+        persona_id: Optional[str] = None,
     ) -> bool:
         """Render and send split text chunks"""
         char_limit = int(self.cfg().get("render_char_threshold", 60) or 0)
@@ -2013,7 +2279,7 @@ class ChuanHuaTongPlugin(Star):
         
         if len(chunks_with_emotion) <= 1:
             # Single chunk, render normally
-            image_path = await self._render_with_fallback(text, emotion, session_id)
+            image_path = await self._render_with_fallback(text, emotion, session_id, persona_id)
             if image_path:
                 chain = MessageChain()
                 chain.file_image(image_path)
@@ -2031,7 +2297,7 @@ class ChuanHuaTongPlugin(Star):
         
         for idx, (chunk_text, chunk_emotion) in enumerate(chunks_with_emotion, 1):
             try:
-                image_path = await self._render_with_fallback(chunk_text, chunk_emotion, session_id)
+                image_path = await self._render_with_fallback(chunk_text, chunk_emotion, session_id, persona_id)
                 if image_path:
                     rendered_images.append(image_path)
                 else:
@@ -2568,21 +2834,9 @@ class ChuanHuaTongPlugin(Star):
             "emotion_sets": self._emotion_payload(),
         })
 
-    if hasattr(filter, "on_message"):
-
-        @filter.on_message(priority=-10)  # 降低优先级，确保在其他插件之后处理
-        async def handle_message_events(
-            self,
-            event: AstrMessageEvent,
-            req: Optional[ProviderRequest] = None,
-        ):
-            await self._handle_preset_command(event, req)
 
     @filter.on_llm_request(priority=-10)  # 降低优先级，确保在其他插件之后处理
     async def inject_emotion_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
-        handled = await self._handle_preset_command(event, req)
-        if handled:
-            return
         if not self._cfg_bool("enable_emotion_prompt", False):
             return
         emotions = self._emotion_meta()
@@ -2656,7 +2910,8 @@ class ChuanHuaTongPlugin(Star):
     async def on_decorating_result(self, event: AstrMessageEvent):
         """在装饰结果时使用已提取的表情标签，不再重复清洗消息链"""
         session_id = event.unified_msg_origin
-        logger.debug("[传话筒] on_decorating_result 触发，会话: %s", session_id)
+        persona_id = await self._resolve_current_persona_id(event, None)
+        logger.debug("[传话筒] on_decorating_result 触发，会话: %s，人格: %s", session_id, persona_id)
         
         # 获取当前结果
         result = event.get_result()
@@ -2727,7 +2982,7 @@ class ChuanHuaTongPlugin(Star):
                     if text_len > char_limit:
                         if enable_split:
                             logger.info("[传话筒] 文本长度 %s 超过阈值 %s，启用分割渲染", text_len, char_limit)
-                            success = await self._render_split_text(full_text, emotion, event, session_id)
+                            success = await self._render_split_text(full_text, emotion, event, session_id, persona_id)
                             if success:
                                 result.chain = []
                                 logger.info("[传话筒] 分割渲染完成，会话: %s", session_id)
@@ -2740,7 +2995,7 @@ class ChuanHuaTongPlugin(Star):
                 
                 # 第四步：尝试渲染，如果成功则替换为图片，失败则保持清洗后的文本
                 logger.debug("[传话筒] 开始渲染图片，会话: %s", session_id)
-                image_path = await self._render_with_fallback(full_text, emotion, session_id)
+                image_path = await self._render_with_fallback(full_text, emotion, session_id, persona_id)
                 if image_path:
                     try:
                         # 渲染成功，替换为图片
@@ -2804,90 +3059,6 @@ class ChuanHuaTongPlugin(Star):
                 return text.strip()
         return ""
 
-    def _switch_preset(self, target: str, session_id: Optional[str] = None) -> tuple[bool, str, Optional[str]]:
-        """切换预设，如果提供了session_id则保存到会话配置，否则保存到全局配置"""
-        normalized = str(target or "").strip()
-        if not normalized:
-            return False, self._format_preset_list_message(), None
-        record = self._load_preset(normalized)
-        if not record:
-            return False, f"未找到名为「{normalized}」的预设。\n\n{self._format_preset_list_message()}", None
-        
-        if session_id:
-            # 保存到会话特定配置
-            preset_name = record.get("name") or normalized
-            self._save_session_layout(session_id, record["layout"], preset_name)
-            # 刷新缓存，确保立绘正确显示
-            self._cached_emotions.clear()
-            self._emotion_meta()  # 重新加载情绪配置
-            logger.info("[传话筒] 切换到预设: %s (会话: %s)", preset_name, session_id)
-            return True, f"已切换到预设「{preset_name}」（仅当前会话）。", preset_name
-        else:
-            # 保存到全局配置
-            self._set_layout_state(record["layout"])
-            self._remember_current_preset(record)
-            # 刷新缓存，确保立绘正确显示
-            self._cached_emotions.clear()
-            self._emotion_meta()  # 重新加载情绪配置
-            logger.info("[传话筒] 切换到预设: %s (全局)", record.get("name") or normalized)
-            return True, f"已切换到预设「{record['name']}」（全局）。", record.get("name") or normalized
-
-    async def _handle_preset_command(
-        self,
-        event: AstrMessageEvent,
-        req: Optional[ProviderRequest],
-    ) -> bool:
-        """处理预设切换命令（用于事件钩子，不用于 @filter.command）"""
-        if hasattr(event, "is_stopped") and event.is_stopped():
-            return False
-        # 检查是否是指令消息（通过 message_str 判断，框架会自动处理命令符）
-        text = event.message_str or ""
-        stripped = text.strip()
-        # 移除可能的命令符前缀（框架可能已经处理，但为了兼容性保留）
-        if stripped and stripped[0] in {"/", "*", "／", "＊"}:
-            stripped = stripped[1:].lstrip()
-        if not stripped.startswith("切换预设"):
-            return False
-        target = stripped[len("切换预设"):].strip()
-        if not self._check_control_permission(event):
-            denial = "你没有权限使用此指令。"
-            event.set_result(event.plain_result(denial))
-            event.stop_event()
-            return True
-        session_id = event.unified_msg_origin
-        success, message, preset_name = self._switch_preset(target, session_id)
-        event.set_result(event.plain_result(message))
-        event.stop_event()
-        if success:
-            logger.info("[传话筒] 通过指令切换预设: %s", preset_name)
-        return True
-
-    @filter.command("切换预设")
-    async def command_switch_preset(self, event: AstrMessageEvent, *preset_tokens: str):
-        """切换预设（仅当前会话）。用法：/切换预设 <预设名>"""
-        if not self._check_control_permission(event):
-            yield event.plain_result("你没有权限使用此指令。")
-            event.stop_event()
-            return
-        target = " ".join(preset_tokens).strip()
-        if not target:
-            yield event.plain_result("请提供预设名称。使用 /预设列表 查看所有可用预设。")
-            event.stop_event()
-            return
-        session_id = event.unified_msg_origin
-        success, message, preset_name = self._switch_preset(target, session_id)
-        yield event.plain_result(message)
-        event.stop_event()
-        if success:
-            logger.info("[传话筒] 通过命令切换预设: %s (会话: %s)", preset_name, session_id)
-
-    @filter.command("预设列表")
-    async def command_list_presets(self, event: AstrMessageEvent):
-        """列出所有可用的预设"""
-        message = self._format_preset_list_message()
-        yield event.plain_result(message)
-        event.stop_event()
-
     @filter.command("传话筒开启")
     async def command_chuanhuatong_enable(self, event: AstrMessageEvent):
         """在当前会话启用传话筒（根据模式添加到白名单或从黑名单移除）"""
@@ -2924,7 +3095,6 @@ class ChuanHuaTongPlugin(Star):
         session_id = event.unified_msg_origin
         has_custom = self._has_session_layout(session_id)
         if has_custom:
-            # 获取会话特定的预设信息
             session_layout = self._load_session_layout(session_id)
             preset_name = session_layout.get("_preset_name") if session_layout else None
             if preset_name:
@@ -2933,7 +3103,13 @@ class ChuanHuaTongPlugin(Star):
                 current_preset = "自定义布局（会话独立配置）"
         else:
             current_preset = self._current_preset_name() or "自定义布局（全局配置）"
+        persona_id = await self._resolve_current_persona_id(event, None)
         config_type = "会话独立配置" if has_custom else "全局配置"
-        message = f"传话筒状态：{status_text}\n模式：{mode_text}\n配置类型：{config_type}\n当前预设：{current_preset}"
+        persona_binding = "未绑定"
+        if persona_id:
+            binding_record = self._load_persona_preset_bindings().get(self._normalize_persona_binding_id(persona_id))
+            if binding_record:
+                persona_binding = str(binding_record.get("name") or binding_record.get("slug") or "未命名预设")
+        message = f"传话筒状态：{status_text}\n模式：{mode_text}\n配置类型：{config_type}\n当前预设：{current_preset}\n当前人格预设绑定：{persona_binding}"
         yield event.plain_result(message)
         event.stop_event()
