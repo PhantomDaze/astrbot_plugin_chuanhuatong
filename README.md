@@ -100,6 +100,25 @@ forked from [bvzrays/astrbot_plugin_chuanhuatong](https://github.com/bvzrays/ast
 | `name` | string | 预设名 |
 | `slug` | string | 预设 slug（可选，优先用它精确匹配） |
 
+配置示例：
+
+```json
+[
+  {
+    "persona_id": "default",
+    "name": "赛博女巫",
+    "slug": "sai-bo-nv-wu"
+  },
+  {
+    "persona_id": "tsundere_girl",
+    "name": "傲娇学姐",
+    "slug": ""
+  }
+]
+```
+
+上例将 `default` 人格绑定到名为「赛博女巫」的预设（通过 slug 精确匹配），将 `tsundere_girl` 人格绑定到「傲娇学姐」预设（通过 name 匹配）。
+
 ### 黑白名单
 
 | 配置项 | 类型 | 默认值 | 说明 |
