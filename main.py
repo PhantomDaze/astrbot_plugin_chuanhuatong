@@ -513,6 +513,52 @@ class ChuanHuaTongPlugin(Star):
         except Exception:
             return persona_key
 
+    def _list_personas(self) -> list[dict[str, Any]]:
+        """列出 AstrBot 当前可用的全部人格，供 WebUI 选择绑定。
+
+        优先读取 persona_manager.personas_v3（Personality dict 列表，name 即 persona_id）。
+        同时始终包含 default 兜底项。
+        """
+        personas: list[dict[str, Any]] = [
+            {"id": "default", "label": "默认人格 (default)"}
+        ]
+        seen = {"default"}
+        persona_mgr = getattr(self.context, "persona_manager", None)
+        records: list[Any] = []
+        if persona_mgr is not None:
+            records = list(getattr(persona_mgr, "personas_v3", []) or [])
+        for persona in records:
+            try:
+                if isinstance(persona, dict):
+                    persona_id = str(persona.get("persona_id") or persona.get("name") or "").strip()
+                    label = str(persona.get("name") or persona_id or "").strip() or persona_id
+                else:
+                    persona_id = str(getattr(persona, "persona_id", "") or getattr(persona, "name", "") or "").strip()
+                    label = str(getattr(persona, "name", None) or persona_id or "").strip() or persona_id
+            except Exception:
+                continue
+            if not persona_id or persona_id in seen:
+                continue
+            seen.add(persona_id)
+            personas.append({"id": persona_id, "label": label or persona_id})
+        return personas
+
+    def _persona_binding_records(self) -> list[dict[str, Any]]:
+        """以列表形式返回当前人格预设绑定，附带展示名，便于 WebUI 渲染。"""
+        bindings = self._load_persona_preset_bindings()
+        records: list[dict[str, Any]] = []
+        for persona_id in sorted(bindings.keys()):
+            entry = bindings.get(persona_id) or {}
+            preset_name = str(entry.get("name") or "").strip()
+            slug = str(entry.get("slug") or "").strip()
+            records.append({
+                "persona_id": persona_id,
+                "persona_label": self._persona_display_name(persona_id) or persona_id,
+                "preset_name": preset_name or slug,
+                "preset_slug": slug,
+            })
+        return records
+
     def _normalize_persona_binding_id(self, persona_ref: str | None) -> str:
         persona_key = self._normalize_persona_ref(persona_ref)
         if not persona_key:
@@ -2505,6 +2551,10 @@ class ChuanHuaTongPlugin(Star):
                     web.get("/api/fonts/raw/{name}", self._handle_font_file),
                     web.post("/api/emotions/save", self._handle_save_emotions),
                     web.post("/api/emotions/reset", self._handle_reset_emotions),
+                    web.get("/api/personas", self._handle_list_personas),
+                    web.get("/api/persona-bindings", self._handle_list_persona_bindings),
+                    web.post("/api/persona-bindings/save", self._handle_save_persona_binding),
+                    web.post("/api/persona-bindings/delete", self._handle_delete_persona_binding),
                 ]
             )
             self._web_app = app
@@ -2834,8 +2884,59 @@ class ChuanHuaTongPlugin(Star):
             "emotion_sets": self._emotion_payload(),
         })
 
+    async def _handle_list_personas(self, request: web.Request):
+        await self._authorize(request)
+        return web.json_response({"personas": self._list_personas()})
 
-    @filter.on_llm_request(priority=-10)  # 降低优先级，确保在其他插件之后处理
+    async def _handle_list_persona_bindings(self, request: web.Request):
+        await self._authorize(request)
+        return web.json_response({
+            "bindings": self._persona_binding_records(),
+            "presets": self._list_presets(),
+            "personas": self._list_personas(),
+        })
+
+    async def _handle_save_persona_binding(self, request: web.Request):
+        await self._authorize(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="invalid json")
+        persona_ref = str(body.get("persona_id", "") or "").strip()
+        preset_identifier = str(body.get("preset_name") or body.get("preset_slug") or body.get("name") or "").strip()
+        if not persona_ref or not preset_identifier:
+            raise web.HTTPBadRequest(text="persona_id and preset_name required")
+        ok, message, _ = self._set_persona_preset_binding(persona_ref, preset_identifier)
+        if not ok:
+            raise web.HTTPBadRequest(text=message)
+        logger.info("[传话筒] WebUI 已添加人格预设绑定：%s", persona_ref)
+        return web.json_response({
+            "ok": True,
+            "message": message,
+            "bindings": self._persona_binding_records(),
+        })
+
+    async def _handle_delete_persona_binding(self, request: web.Request):
+        await self._authorize(request)
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="invalid json")
+        persona_ref = str(body.get("persona_id", "") or "").strip()
+        if not persona_ref:
+            raise web.HTTPBadRequest(text="persona_id required")
+        ok, message = self._clear_persona_preset_binding(persona_ref)
+        if not ok:
+            raise web.HTTPNotFound(text=message)
+        logger.info("[传话筒] WebUI 已解除人格预设绑定：%s", persona_ref)
+        return web.json_response({
+            "ok": True,
+            "message": message,
+            "bindings": self._persona_binding_records(),
+        })
+
+
+
     async def inject_emotion_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
         if not self._cfg_bool("enable_emotion_prompt", False):
             return

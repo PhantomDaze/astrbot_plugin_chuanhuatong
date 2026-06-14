@@ -100,7 +100,9 @@ forked from [bvzrays/astrbot_plugin_chuanhuatong](https://github.com/bvzrays/ast
 | `name` | string | 预设名 |
 | `slug` | string | 预设 slug（可选，优先用它精确匹配） |
 
-配置示例：
+> **推荐在 WebUI 中管理**：打开 WebUI（默认 `http://127.0.0.1:18765`，需配置 token 时附在 `?token=` 上），在「人格预设绑定」面板里选择人格和预设后点击「绑定」即可，无需手写 JSON。绑定列表中每项都提供「解绑」按钮。
+
+配置示例（手写时）：
 
 ```json
 [
@@ -118,6 +120,8 @@ forked from [bvzrays/astrbot_plugin_chuanhuatong](https://github.com/bvzrays/ast
 ```
 
 上例将 `default` 人格绑定到名为「赛博女巫」的预设（通过 slug 精确匹配），将 `tsundere_girl` 人格绑定到「傲娇学姐」预设（通过 name 匹配）。
+
+> 说明：`persona_id` 来源于 AstrBot 人格管理器（`persona_manager.personas_v3`），即人格的 ID；`name`/`slug` 指向本插件已保存的布局预设。WebUI 会自动从 AstrBot 拉取当前可用的人格列表供选择。
 
 ### 黑白名单
 
@@ -141,10 +145,11 @@ forked from [bvzrays/astrbot_plugin_chuanhuatong](https://github.com/bvzrays/ast
 
 ## 指令
 
-- `/传话筒 开启` — 在当前会话启用传话筒渲染
-- `/传话筒 关闭` — 在当前会话禁用传话筒渲染
-- `/人格预设绑定 <人格ID> <预设名>` — 绑定人格到布局预设
-- `/人格预设解绑 <人格ID>` — 解绑人格预设
+- `/传话筒开启` — 在当前会话启用传话筒渲染
+- `/传话筒关闭` — 在当前会话禁用传话筒渲染
+- `/传话筒状态` — 查询当前状态（启用状态、模式、配置类型、当前预设、当前人格绑定）
+
+> 人格预设绑定通过 WebUI 的「人格预设绑定」面板管理，暂无聊天指令。
 
 ---
 
