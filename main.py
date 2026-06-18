@@ -963,6 +963,28 @@ class ChuanHuaTongPlugin(Star):
     def _current_preset_name(self) -> str:
         return str(self._current_preset_meta.get("name") or "")
 
+    def _format_preset_list_message(self) -> str:
+        presets = self._list_presets()
+        current_name = self._current_preset_name()
+        current_slug = str(self._current_preset_meta.get("slug") or "")
+        lines = ["预设列表："]
+        if current_name:
+            lines.append(f"当前预设：{current_name}")
+        else:
+            lines.append("当前预设：自定义布局（未绑定预设）")
+        if not presets:
+            lines.append("暂未保存任何预设。")
+            return "\n".join(lines)
+        lines.append("可用预设：")
+        for idx, info in enumerate(presets, start=1):
+            name = str(info.get("name") or "").strip() or "未命名预设"
+            slug = str(info.get("slug") or "").strip()
+            marker = "（当前）" if slug and slug == current_slug else ""
+            updated = str(info.get("saved_at") or "").strip()
+            lines.append(f"{idx}. {name}{marker}" + (f" - {updated}" if updated else ""))
+        lines.append("使用 /切换预设 预设名称 即可切换。")
+        return "\n".join(lines)
+
     @staticmethod
     def _is_event_admin(event: AstrMessageEvent) -> bool:
         checker = getattr(event, "is_admin", None)
@@ -3100,9 +3122,21 @@ class ChuanHuaTongPlugin(Star):
             "bindings": self._persona_binding_records(),
         })
 
+    if hasattr(filter, "on_message"):
 
+        @filter.on_message(priority=-10)  # 降低优先级，确保在其他插件之后处理
+        async def handle_message_events(
+            self,
+            event: AstrMessageEvent,
+            req: Optional[ProviderRequest] = None,
+        ):
+            await self._handle_preset_command(event, req)
 
+    @filter.on_llm_request(priority=-10)  # 降低优先级，确保在其他插件之后处理
     async def inject_emotion_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
+        handled = await self._handle_preset_command(event, req)
+        if handled:
+            return
         if not self._cfg_bool("enable_emotion_prompt", False):
             return
         emotions = self._emotion_meta()
@@ -3110,6 +3144,84 @@ class ChuanHuaTongPlugin(Star):
         template = str(self.cfg().get("emotion_prompt_template", self.DEFAULT_PROMPT_TEMPLATE))
         instruction = template.replace("{tags}", ", ".join(tags))
         req.system_prompt = (req.system_prompt or "") + "\n" + instruction
+
+    def _switch_preset(self, target: str, session_id: Optional[str] = None) -> tuple[bool, str, Optional[str]]:
+        """切换预设，如果提供了session_id则保存到会话配置，否则保存到全局配置"""
+        normalized = str(target or "").strip()
+        if not normalized:
+            return False, self._format_preset_list_message(), None
+        record = self._load_preset(normalized)
+        if not record:
+            return False, f"未找到名为「{normalized}」的预设。\n\n{self._format_preset_list_message()}", None
+
+        if session_id:
+            preset_name = record.get("name") or normalized
+            self._save_session_layout(session_id, record["layout"], preset_name)
+            self._cached_emotions.clear()
+            self._emotion_meta()
+            logger.info("[传话筒] 切换到预设: %s (会话: %s)", preset_name, session_id)
+            return True, f"已切换到预设「{preset_name}」（仅当前会话）。", preset_name
+
+        self._set_layout_state(record["layout"])
+        self._remember_current_preset(record)
+        self._cached_emotions.clear()
+        self._emotion_meta()
+        logger.info("[传话筒] 切换到预设: %s (全局)", record.get("name") or normalized)
+        return True, f"已切换到预设「{record['name']}」（全局）。", record.get("name") or normalized
+
+    async def _handle_preset_command(
+        self,
+        event: AstrMessageEvent,
+        req: Optional[ProviderRequest],
+    ) -> bool:
+        """处理预设切换命令（用于事件钩子，不用于 @filter.command）"""
+        if hasattr(event, "is_stopped") and event.is_stopped():
+            return False
+        text = event.message_str or ""
+        stripped = text.strip()
+        if stripped and stripped[0] in {"/", "*", "／", "＊"}:
+            stripped = stripped[1:].lstrip()
+        if not stripped.startswith("切换预设"):
+            return False
+        target = stripped[len("切换预设"):].strip()
+        if not self._check_control_permission(event):
+            denial = "你没有权限使用此指令。"
+            event.set_result(event.plain_result(denial))
+            event.stop_event()
+            return True
+        session_id = event.unified_msg_origin
+        success, message, preset_name = self._switch_preset(target, session_id)
+        event.set_result(event.plain_result(message))
+        event.stop_event()
+        if success:
+            logger.info("[传话筒] 通过指令切换预设: %s", preset_name)
+        return True
+
+    @filter.command("切换预设")
+    async def command_switch_preset(self, event: AstrMessageEvent, *preset_tokens: str):
+        """切换预设（仅当前会话）。用法：/切换预设 <预设名>"""
+        if not self._check_control_permission(event):
+            yield event.plain_result("你没有权限使用此指令。")
+            event.stop_event()
+            return
+        target = " ".join(preset_tokens).strip()
+        if not target:
+            yield event.plain_result("请提供预设名称。使用 /预设列表 查看所有可用预设。")
+            event.stop_event()
+            return
+        session_id = event.unified_msg_origin
+        success, message, preset_name = self._switch_preset(target, session_id)
+        yield event.plain_result(message)
+        event.stop_event()
+        if success:
+            logger.info("[传话筒] 通过命令切换预设: %s (会话: %s)", preset_name, session_id)
+
+    @filter.command("预设列表")
+    async def command_list_presets(self, event: AstrMessageEvent):
+        """列出所有可用的预设"""
+        message = self._format_preset_list_message()
+        yield event.plain_result(message)
+        event.stop_event()
 
     async def _update_conversation_history(self, event: AstrMessageEvent, cleaned_text: str):
         """更新对话历史，移除表情标签"""
