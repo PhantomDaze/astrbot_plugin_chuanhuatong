@@ -7,8 +7,10 @@ import os
 import random
 import re
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from uuid import uuid4
@@ -21,11 +23,6 @@ from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core.message.message_event_result import MessageChain
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-try:
-    from pilmoji import Pilmoji
-except Exception:
-    Pilmoji = None
 
 PLAIN_COMPONENT_TYPES = tuple(
     getattr(Comp, name)
@@ -1988,31 +1985,26 @@ class ChuanHuaTongPlugin(Star):
     ):
         if not text:
             return
-        if Pilmoji:
-            try:
-                with Pilmoji(canvas) as pilmoji:
-                    pilmoji.text(
-                        position,
-                        text,
-                        font=font,
-                        fill=fill,
-                        stroke_width=stroke_width,
-                        stroke_fill=stroke_fill,
-                        spacing=spacing,
-                    )
-                    return
-            except Exception:
-                logger.debug("[传话筒] Pilmoji 渲染失败，回退到 Pillow。", exc_info=True)
         draw = ImageDraw.Draw(canvas)
-        draw.multiline_text(
-            position,
-            text,
-            font=font,
-            fill=fill,
-            spacing=spacing,
-            stroke_width=stroke_width,
-            stroke_fill=stroke_fill,
-        )
+        fallback_fonts = self._system_font_candidates(getattr(font, "size", 30))
+        x, y = position
+        line_gap = max(0, int(spacing))
+        for line in text.replace("\r", "").split("\n"):
+            if line:
+                line_height = self._draw_text_line(
+                    draw,
+                    (x, y),
+                    line,
+                    font,
+                    fallback_fonts,
+                    fill,
+                    stroke_width=stroke_width,
+                    stroke_fill=stroke_fill,
+                )
+            else:
+                ascent, descent = self._font_metrics(font)
+                line_height = ascent + descent
+            y += line_height + line_gap
 
     def _draw_textbox_layer(self, canvas: Image.Image, layout: Dict[str, Any], text: str):
         box_left = int(layout.get("box_left", 520))
@@ -2127,12 +2119,17 @@ class ChuanHuaTongPlugin(Star):
         if os.name == "nt":
             candidates.extend([
                 "C:/Windows/Fonts/msyh.ttc",
+                "C:/Windows/Fonts/msyh.ttf",
                 "C:/Windows/Fonts/simhei.ttf",
+                "C:/Windows/Fonts/seguiemj.ttf",
             ])
         else:
             candidates.extend([
                 "/System/Library/Fonts/PingFang.ttc",
                 "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/Apple Color Emoji.ttc",
+                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             ])
         for path in candidates:
@@ -2144,9 +2141,173 @@ class ChuanHuaTongPlugin(Star):
                 continue
         return ImageFont.load_default()
 
+    @lru_cache(maxsize=16)
+    def _system_font_candidates(self, size: int) -> tuple[ImageFont.ImageFont, ...]:
+        candidates: list[ImageFont.ImageFont] = []
+        if os.name == "nt":
+            paths = [
+                "C:/Windows/Fonts/seguiemj.ttf",
+                "C:/Windows/Fonts/msyh.ttc",
+                "C:/Windows/Fonts/simhei.ttf",
+                "C:/Windows/Fonts/msgothic.ttc",
+            ]
+        else:
+            paths = [
+                "/System/Library/Fonts/Apple Color Emoji.ttc",
+                "/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ]
+        for path in paths:
+            try:
+                candidates.append(ImageFont.truetype(path, size=size))
+            except Exception:
+                continue
+        if not candidates:
+            candidates.append(ImageFont.load_default())
+        return tuple(candidates)
+
+    def _glyph_uses_font(self, font: ImageFont.ImageFont, char: str) -> bool:
+        if not char or char.isspace():
+            return True
+        try:
+            bbox = font.getbbox(char)
+            if not bbox:
+                return False
+            return (bbox[2] - bbox[0]) > 0 and (bbox[3] - bbox[1]) > 0
+        except Exception:
+            try:
+                return bool(font.getmask(char).getbbox())
+            except Exception:
+                return False
+
+    def _font_for_char(self, primary: ImageFont.ImageFont, char: str, fallback_fonts: tuple[ImageFont.ImageFont, ...]) -> ImageFont.ImageFont:
+        if self._glyph_uses_font(primary, char):
+            return primary
+        for fallback in fallback_fonts:
+            if fallback is primary:
+                continue
+            if self._glyph_uses_font(fallback, char):
+                return fallback
+        return primary
+
+    def _text_clusters(self, text: str) -> list[str]:
+        clusters: list[str] = []
+        if not text:
+            return clusters
+
+        current = ""
+        join_next = False
+        for char in text:
+            if not current:
+                current = char
+                join_next = char == "\u200d"
+                continue
+
+            if join_next:
+                current += char
+                join_next = char == "\u200d"
+                continue
+
+            category = unicodedata.category(char)
+            if char == "\u200d" or category in {"Mn", "Me", "Cf"} or "\ufe00" <= char <= "\ufe0f" or "\U0001F3FB" <= char <= "\U0001F3FF":
+                current += char
+                join_next = char == "\u200d"
+                continue
+
+            clusters.append(current)
+            current = char
+            join_next = char == "\u200d"
+
+        if current:
+            clusters.append(current)
+        return clusters
+
+    def _font_metrics(self, font: ImageFont.ImageFont) -> tuple[int, int]:
+        try:
+            ascent, descent = font.getmetrics()
+            return int(ascent), int(descent)
+        except Exception:
+            size = int(getattr(font, "size", 30) or 30)
+            return size, max(1, size // 4)
+
+    def _split_text_runs(
+        self,
+        text: str,
+        primary: ImageFont.ImageFont,
+        fallback_fonts: tuple[ImageFont.ImageFont, ...],
+    ) -> list[tuple[str, ImageFont.ImageFont]]:
+        runs: list[tuple[str, ImageFont.ImageFont]] = []
+        if not text:
+            return runs
+
+        current_font: Optional[ImageFont.ImageFont] = None
+        current_text = ""
+        for cluster in self._text_clusters(text):
+            char_font = self._font_for_char(primary, cluster, fallback_fonts)
+            if current_font is char_font:
+                current_text += cluster
+                continue
+            if current_text:
+                runs.append((current_text, current_font or primary))
+            current_font = char_font
+            current_text = cluster
+        if current_text:
+            runs.append((current_text, current_font or primary))
+        return runs
+
+    def _draw_text_line(
+        self,
+        draw: ImageDraw.ImageDraw,
+        position: tuple[int, int],
+        text: str,
+        primary: ImageFont.ImageFont,
+        fallback_fonts: tuple[ImageFont.ImageFont, ...],
+        fill: tuple[int, int, int, int],
+        stroke_width: int = 0,
+        stroke_fill: tuple[int, int, int, int] = (0, 0, 0, 255),
+    ) -> int:
+        runs = self._split_text_runs(text, primary, fallback_fonts)
+        if not runs:
+            return 0
+
+        metrics = [self._font_metrics(font) for _, font in runs]
+        line_ascent = max(ascent for ascent, _ in metrics)
+        line_descent = max(descent for _, descent in metrics)
+        x, y = position
+        cursor_x = x
+        for (run_text, run_font), (ascent, _) in zip(runs, metrics):
+            run_y = y + (line_ascent - ascent)
+            draw.text(
+                (cursor_x, run_y),
+                run_text,
+                font=run_font,
+                fill=fill,
+                stroke_width=stroke_width,
+                stroke_fill=stroke_fill,
+            )
+            cursor_x += int(round(self._measure_text_width(draw, run_text, run_font)))
+        return line_ascent + line_descent
+
+    def _measure_text_width(self, draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> float:
+        if not text:
+            return 0.0
+        try:
+            return float(draw.textlength(text, font=font))
+        except Exception:
+            try:
+                bbox = draw.textbbox((0, 0), text, font=font)
+                return float(bbox[2] - bbox[0]) if bbox else 0.0
+            except Exception:
+                return 0.0
+
     def _wrap_text(self, text: str, font: ImageFont.ImageFont, max_width: int) -> str:
         if not text:
             return ""
+        fallback_fonts = self._system_font_candidates(getattr(font, "size", 30))
         draw = ImageDraw.Draw(Image.new("RGBA", (max_width, 10)))
         lines: list[str] = []
         for paragraph in text.splitlines():
@@ -2154,13 +2315,17 @@ class ChuanHuaTongPlugin(Star):
                 lines.append("")
                 continue
             current = ""
+            current_width = 0.0
             for char in paragraph:
-                test = current + char
-                if draw.textlength(test, font=font) <= max_width:
-                    current = test
-                else:
+                char_font = self._font_for_char(font, char, fallback_fonts)
+                char_width = self._measure_text_width(draw, char, char_font)
+                if current and current_width + char_width > max_width:
                     lines.append(current)
                     current = char
+                    current_width = self._measure_text_width(draw, char, char_font)
+                else:
+                    current += char
+                    current_width += char_width
             if current:
                 lines.append(current)
         return "\n".join(lines)

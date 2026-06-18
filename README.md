@@ -31,7 +31,7 @@ forked from [bvzrays/astrbot_plugin_chuanhuatong](https://github.com/bvzrays/ast
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `font_path` | string | `""` | Pillow 备用渲染使用的字体文件路径，不填则自动匹配系统字体 |
+| `font_path` | string | `""` | Pillow 文本渲染使用的主字体路径，缺字时会自动回退到系统字体，适合 emoji 和颜文字 |
 | `background_dir` | string | `"background"` | 背景图片目录（相对于插件目录） |
 
 ### 立绘（角色）
