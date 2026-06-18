@@ -43,7 +43,7 @@
 
   "font_path": {
     "type": "string",
-    "description": "Pillow 备用渲染使用的字体文件路径，不填则自动匹配系统字体",
+    "description": "Pillow 文本渲染使用的主字体路径，缺字时会自动回退到系统字体，适合 emoji 和颜文字",
     "default": ""
   },
 
@@ -121,6 +121,20 @@
     }
   },
 
+  "persona_preset_bindings": {
+    "type": "list",
+    "description": "人格到预设的绑定列表。每项写 persona_id、name、slug。渲染优先级：会话预设 > 人格绑定预设 > 全局布局。",
+    "default": [],
+    "items": {
+      "type": "object",
+      "items": {
+        "persona_id": { "type": "string", "description": "人格ID" },
+        "name": { "type": "string", "description": "预设名" },
+        "slug": { "type": "string", "description": "预设 slug（可空，优先用它精确匹配）" }
+      }
+    }
+  },
+
   "whitelist_mode": {
     "type": "bool",
     "description": "是否启用白名单模式（true=白名单模式，false=黑名单模式）",
@@ -144,6 +158,6 @@
     "description": "控制指令权限：admin=仅框架管理员，admin_or_group_admin=框架管理员或群管理",
     "default": "admin_or_group_admin",
     "options": ["admin", "admin_or_group_admin"],
-    "hint": "控制切换预设和开启/关闭传话筒的权限"
+    "hint": "控制开启/关闭传话筒的权限"
   }
 }

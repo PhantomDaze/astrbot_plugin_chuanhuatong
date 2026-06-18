@@ -392,6 +392,24 @@
           </div>
         </div>
 
+        <div class="panel-section collapsed">
+          <div class="panel-header" onclick="this.parentElement.classList.toggle('collapsed')">人格预设绑定</div>
+          <div class="panel-content">
+            <p class="helper-text">选择一个人格（Persona）和预设（Preset）后绑定，渲染时按“会话预设 &gt; 人格绑定 &gt; 全局布局”优先级匹配。</p>
+            <div class="preset-row">
+              <select id="personaSelect">
+                <option value="">选择人格</option>
+              </select>
+              <select id="personaPresetSelect">
+                <option value="">选择预设</option>
+              </select>
+              <button class="btn-primary" id="bindPersonaPresetBtn">绑定</button>
+            </div>
+            <div class="preset-status" id="personaBindingStatus"></div>
+            <div id="personaBindingList"></div>
+          </div>
+        </div>
+
         <div class="panel-section">
           <div class="panel-header" onclick="this.parentElement.classList.toggle('collapsed')">画布与背景</div>
           <div class="panel-content">
@@ -706,6 +724,8 @@
       characterRatio: 1.8,
       currentPresetSlug: '',
       currentPresetName: '',
+      personas: [],
+      personaBindings: [],
     };
 
 
@@ -797,6 +817,94 @@
         presetSelect.value = state.currentPresetSlug || '';
       }
       renderPresetStatus();
+    }
+
+    function renderPersonaOptions() {
+      const select = document.getElementById('personaSelect');
+      if(!select) return;
+      const options = ['<option value="">选择人格</option>'];
+      (state.personas || []).forEach(p => {
+        const id = escapeHtml(p.id || '');
+        const label = escapeHtml(p.label || p.id || '');
+        options.push(`<option value="${id}">${label}</option>`);
+      });
+      select.innerHTML = options.join('');
+    }
+
+    function renderPersonaPresetOptions() {
+      const select = document.getElementById('personaPresetSelect');
+      if(!select) return;
+      const options = ['<option value="">选择预设</option>'];
+      (state.presets || []).forEach(p => {
+        const value = escapeHtml(p.name || p.slug || '');
+        const label = escapeHtml(p.name || p.slug || '');
+        options.push(`<option value="${value}">${label}</option>`);
+      });
+      select.innerHTML = options.join('');
+    }
+
+    function renderPersonaBindings() {
+      const list = document.getElementById('personaBindingList');
+      const status = document.getElementById('personaBindingStatus');
+      const bindings = state.personaBindings || [];
+      if(status) {
+        status.textContent = bindings.length ? `已绑定 ${bindings.length} 项` : '暂未绑定任何人格预设';
+      }
+      if(!list) return;
+      if(!bindings.length) {
+        list.innerHTML = '<p class="helper-text">在上方选择人格与预设后点击「绑定」。</p>';
+        return;
+      }
+      list.innerHTML = bindings.map(b => {
+        const id = escapeHtml(b.persona_id || '');
+        const personaLabel = escapeHtml(b.persona_label || b.persona_id || '');
+        const presetLabel = escapeHtml(b.preset_name || b.preset_slug || '未命名预设');
+        return `<div class="preset-row" data-persona-id="${id}">
+          <span style="flex:1;">${personaLabel} → ${presetLabel}</span>
+          <button class="btn-ghost" data-unbind="${id}">解绑</button>
+        </div>`;
+      }).join('');
+      list.querySelectorAll('button[data-unbind]').forEach(btn => {
+        btn.onclick = async () => {
+          const personaId = btn.getAttribute('data-unbind');
+          if(!personaId) return;
+          if(!window.confirm(`确定解绑「${personaId}」的人格预设？`)) return;
+          setStatus('正在解绑...');
+          try {
+            const res = await fetch(`/api/persona-bindings/delete${suffix}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...authHeader },
+              body: JSON.stringify({ persona_id: personaId })
+            });
+            if(!res.ok) {
+              const msg = await res.text();
+              throw new Error(msg || '解绑失败');
+            }
+            const data = await res.json();
+            state.personaBindings = data.bindings || [];
+            renderPersonaBindings();
+            setStatus(data.message || '已解绑');
+          } catch(e) {
+            setStatus(e.message || '解绑失败', true);
+          }
+        };
+      });
+    }
+
+    async function loadPersonaBindings() {
+      try {
+        const res = await fetch(`/api/persona-bindings${suffix}`, { headers: authHeader });
+        if(!res.ok) throw new Error('加载失败');
+        const data = await res.json();
+        state.personas = data.personas || state.personas || [];
+        state.presets = data.presets || state.presets;
+        state.personaBindings = data.bindings || [];
+        renderPersonaOptions();
+        renderPersonaPresetOptions();
+        renderPersonaBindings();
+      } catch(e) {
+        renderPersonaBindings();
+      }
     }
 
     const sanitizeEmotionKey = (value = '') => (value || '').toLowerCase().replace(/[^0-9a-z_]/g, '_');
@@ -1212,6 +1320,7 @@
         renderPresetStatus();
         updatePreviewImages();
         setStatus('配置加载成功');
+        loadPersonaBindings();
       } catch (e) {
         setStatus('加载失败: ' + e.message, true);
         console.error(e);
@@ -2032,6 +2141,36 @@
           return;
         }
         await savePresetLayout(presetName, undefined);
+      };
+    }
+
+    const bindPersonaPresetBtn = document.getElementById('bindPersonaPresetBtn');
+    if(bindPersonaPresetBtn) {
+      bindPersonaPresetBtn.onclick = async () => {
+        const personaSelect = document.getElementById('personaSelect');
+        const personaPresetSelect = document.getElementById('personaPresetSelect');
+        const personaId = personaSelect ? personaSelect.value.trim() : '';
+        const presetName = personaPresetSelect ? personaPresetSelect.value.trim() : '';
+        if(!personaId) { setStatus('请先选择人格', true); return; }
+        if(!presetName) { setStatus('请先选择预设', true); return; }
+        setStatus('正在绑定...');
+        try {
+          const res = await fetch(`/api/persona-bindings/save${suffix}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeader },
+            body: JSON.stringify({ persona_id: personaId, preset_name: presetName })
+          });
+          if(!res.ok) {
+            const msg = await res.text();
+            throw new Error(msg || '绑定失败');
+          }
+          const data = await res.json();
+          state.personaBindings = data.bindings || [];
+          renderPersonaBindings();
+          setStatus(data.message || '已绑定');
+        } catch(e) {
+          setStatus(e.message || '绑定失败', true);
+        }
       };
     }
 
