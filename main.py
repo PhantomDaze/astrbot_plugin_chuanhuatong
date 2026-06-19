@@ -2024,7 +2024,12 @@ class ChuanHuaTongPlugin(Star):
                     final_y = canvas.height - target_h - bottom_raw
                 else:  # left-top
                     final_x = canvas.width + left_raw if left_raw < 0 else left_raw
-                    final_y = canvas.height - target_h - bottom_raw if bottom_raw >= 0 else abs(bottom_raw)
+                    # bottom_raw > 0: 从底部往上推（立绘在画布内）
+                    # bottom_raw < 0: 立绘底部超出画布底部（一半在屏幕外）
+                    if bottom_raw >= 0:
+                        final_y = canvas.height - target_h - bottom_raw
+                    else:
+                        final_y = canvas.height - target_h + abs(bottom_raw)
             else:
                 top_raw = int(layout.get("character_top", 0))
                 # 顶部对齐
@@ -2036,7 +2041,12 @@ class ChuanHuaTongPlugin(Star):
                     final_y = canvas.height - target_h + top_raw
                 else:  # left-top
                     final_x = canvas.width + left_raw if left_raw < 0 else left_raw
-                    final_y = canvas.height + top_raw if top_raw < 0 else top_raw
+                    # top_raw > 0: 从顶部往下推（立绘在画布内）
+                    # top_raw < 0: 立绘顶部超出画布顶部（一半在屏幕外）
+                    if top_raw >= 0:
+                        final_y = top_raw
+                    else:
+                        final_y = top_raw  # 负值 top 直接使用，允许 Y < 0
 
             canvas.alpha_composite(img, (final_x, final_y))
         except Exception:
