@@ -5,7 +5,7 @@
 
 ## 公网环境请注意配置token！  点个star谢谢喵
 ## ✨ BUG反馈群：870543663 ✨
-> **当前版本：v2.3.0**
+> **当前版本：v2.4.1**
 
 ![views](https://count.getloli.com/get/@astrbotchuanhuatong?theme=booru-jaypee)
 
@@ -371,10 +371,10 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
 - **数据与配置差异**
   - 数据目录中新增或使用了 `current_preset.json`、`persona_preset_bindings`、`presets/` 等持久化内容。
   - `_conf_schema.json` 中补充了人格预设绑定相关配置项。
-  - 仓库内额外包含系统字体资源，用于缺字回退渲染。
 
-如果你是从原仓库迁移过来，最需要注意的是：
+- **坐标系统增强**
+  - 支持三种锚点模式：`left-top`（默认）、`center`（画布中心偏移）、`right-bottom`（右下角偏移）。
+  - 支持负值坐标，允许文本框/立绘一半或全部在屏幕外，无需裁剪即可实现创意布局。
+  - WebUI 拖拽编辑器移除边界限制，可直接拖拽元素到画布外。
+  - 完全向后兼容：旧预设无 `anchor` 字段时自动视为 `left-top`，行为不变。
 
-1. 本分支新增了人格到预设的绑定能力，且可以在 WebUI 里管理。
-2. 渲染时会对主字体缺字进行系统字体回退，不再只依赖单一字体文件。
-3. 相关绑定和预设信息会落盘到数据目录，重启后仍然保留。
