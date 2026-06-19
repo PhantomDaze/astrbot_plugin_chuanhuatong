@@ -2562,7 +2562,7 @@ class ChuanHuaTongPlugin(Star):
                 chain.message(f"{chunk_text}\n")
                 await event.send(chain)
             except Exception:
-                logger.debug("[传话筒] 发送降级文本失败", exc_info=True)
+                logger.warning("[传话筒] 发送降级文本失败", exc_info=True)
 
     async def _render_split_text(
         self,
@@ -2579,16 +2579,27 @@ class ChuanHuaTongPlugin(Star):
         
         # Split text with emotion assignment
         chunks_with_emotion = self._split_text_with_emotion(text, char_limit, emotion)
-        
+
+        if not chunks_with_emotion:
+            # No chunks after splitting (e.g., text was only emotion tags)
+            return False
+
         if len(chunks_with_emotion) <= 1:
             # Single chunk, render normally
-            image_path = await self._render_with_fallback(text, emotion, session_id, persona_id)
+            # Use cleaned text from the chunk (first element) instead of original text with tags
+            clean_text = chunks_with_emotion[0][0]
+            chunk_emotion = chunks_with_emotion[0][1] if chunks_with_emotion[0][1] else emotion
+            image_path = await self._render_with_fallback(clean_text, chunk_emotion, session_id, persona_id)
             if image_path:
-                chain = MessageChain()
-                chain.file_image(image_path)
-                await event.send(chain)
-                self._schedule_cleanup(image_path, delay=90.0)
-                return True
+                try:
+                    chain = MessageChain()
+                    chain.file_image(image_path)
+                    await event.send(chain)
+                    self._schedule_cleanup(image_path, delay=90.0)
+                    return True
+                except Exception:
+                    logger.error("[传话筒] 单块路径发送图片失败", exc_info=True)
+                    return False
             return False
         
         # Render multiple chunks (sequential)
@@ -2606,7 +2617,7 @@ class ChuanHuaTongPlugin(Star):
                 else:
                     fallback_texts.append((idx, chunk_text))
             except Exception as exc:
-                logger.error("[传话筒] 渲染第 %s 段失败: %s", idx, exc)
+                logger.error("[传话筒] 渲染第 %s 段失败: %s", idx, exc, exc_info=True)
                 fallback_texts.append((idx, chunk_text))
         
         if not rendered_images:
@@ -2635,32 +2646,41 @@ class ChuanHuaTongPlugin(Star):
             for batch_idx, batch in enumerate(batches, 1):
                 if len(batch) == 1:
                     # Single image in batch, send directly
-                    chain = MessageChain()
-                    chain.file_image(batch[0])
-                    await event.send(chain)
-                    self._schedule_cleanup(batch[0], delay=90.0)
-                    success_count += 1
+                    try:
+                        chain = MessageChain()
+                        chain.file_image(batch[0])
+                        await event.send(chain)
+                        self._schedule_cleanup(batch[0], delay=90.0)
+                        success_count += 1
+                    except Exception:
+                        logger.error("[传话筒] 第 %s 批单图发送失败", batch_idx, exc_info=True)
                 else:
                     # Merge batch
                     merged_path = await asyncio.to_thread(self._merge_images_vertical, batch)
-                    
+
                     if merged_path:
-                        chain = MessageChain()
-                        chain.file_image(merged_path)
-                        await event.send(chain)
-                        
-                        for path in batch:
-                            self._schedule_cleanup(path, delay=5.0)
-                        self._schedule_cleanup(merged_path, delay=90.0)
-                        success_count += 1
+                        try:
+                            chain = MessageChain()
+                            chain.file_image(merged_path)
+                            await event.send(chain)
+
+                            for path in batch:
+                                self._schedule_cleanup(path, delay=5.0)
+                            self._schedule_cleanup(merged_path, delay=90.0)
+                            success_count += 1
+                        except Exception:
+                            logger.error("[传话筒] 第 %s 批合并图发送失败", batch_idx, exc_info=True)
                     else:
                         logger.warning("[传话筒] 第 %s 批合并失败，逐张发送", batch_idx)
                         for path in batch:
-                            chain = MessageChain()
-                            chain.file_image(path)
-                            await event.send(chain)
-                            self._schedule_cleanup(path, delay=90.0)
-                        success_count += 1
+                            try:
+                                chain = MessageChain()
+                                chain.file_image(path)
+                                await event.send(chain)
+                                self._schedule_cleanup(path, delay=90.0)
+                                success_count += 1
+                            except Exception:
+                                logger.error("[传话筒] 第 %s 批逐图发送失败", batch_idx, exc_info=True)
             
             # Send fallback texts if any
             await self._send_fallback_texts(fallback_texts, event)
@@ -2670,10 +2690,13 @@ class ChuanHuaTongPlugin(Star):
         
         # Fallback: send images one by one
         for image_path in rendered_images:
-            chain = MessageChain()
-            chain.file_image(image_path)
-            await event.send(chain)
-            self._schedule_cleanup(image_path, delay=90.0)
+            try:
+                chain = MessageChain()
+                chain.file_image(image_path)
+                await event.send(chain)
+                self._schedule_cleanup(image_path, delay=90.0)
+            except Exception:
+                logger.error("[传话筒] 逐图发送失败", exc_info=True)
         
         # Send fallback texts
         await self._send_fallback_texts(fallback_texts, event)

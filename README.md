@@ -5,7 +5,7 @@
 
 ## 公网环境请注意配置token！  点个star谢谢喵
 ## ✨ BUG反馈群：870543663 ✨
-> **当前版本：v2.4.1**
+> **当前版本：v2.4.2**
 
 ![views](https://count.getloli.com/get/@astrbotchuanhuatong?theme=booru-jaypee)
 
@@ -377,4 +377,11 @@ AstrBot/data/plugin_data/astrbot_plugin_chuanhuatong/
   - 支持负值坐标，允许文本框/立绘一半或全部在屏幕外，无需裁剪即可实现创意布局。
   - WebUI 拖拽编辑器移除边界限制，可直接拖拽元素到画布外。
   - 完全向后兼容：旧预设无 `anchor` 字段时自动视为 `left-top`，行为不变。
+
+- **长文本分割渲染修复**
+  - 修复单块路径使用未清洗文本的问题（包含 `&happy&` 等情绪标签的文本现在会被正确清洗后渲染）。
+  - 新增空文本边界处理，防止仅含情绪标签的文本进入渲染流程导致异常。
+  - 为所有 `event.send()` 调用添加异常保护，避免发送失败导致整个渲染流程崩溃。
+  - 提升降级文本发送错误的日志级别（debug → warning），便于问题排查。
+  - 分块渲染错误日志现在包含完整堆栈跟踪（添加 `exc_info=True`）。
 
