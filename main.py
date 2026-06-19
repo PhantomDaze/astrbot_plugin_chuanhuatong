@@ -106,6 +106,8 @@ class ChuanHuaTongPlugin(Star):
         "character_align_bottom": True,
         "character_shadow": "drop-shadow(0 12px 36px rgba(0,0,0,0.6))",
         "background_group": "__auto__",
+        "box_anchor": "left-top",
+        "character_anchor": "left-top",
         "text_overlays": [
             {
                 "id": "ov_1764055391684",
@@ -770,6 +772,36 @@ class ChuanHuaTongPlugin(Star):
         except Exception:
             return False
         return False
+
+    @staticmethod
+    def _resolve_anchor_position(canvas_w: int, canvas_h: int, anchor: str, left: int, top: int, width: int, height: int) -> tuple[int, int]:
+        """Resolve final position based on anchor mode and negative values.
+
+        Supports:
+        - anchor "left-top": left/top are from left/top edge (default)
+        - anchor "center": left/top are offsets from canvas center
+        - anchor "right-bottom": left/top are offsets from right/bottom edge
+        - Negative left/top: invert from opposite edge
+        """
+        mode = (anchor or "left-top").lower()
+
+        if mode == "center":
+            final_x = canvas_w // 2 + left
+            final_y = canvas_h // 2 + top
+        elif mode == "right-bottom":
+            final_x = canvas_w - width + left
+            final_y = canvas_h - height + top
+        else:  # left-top (default)
+            if left < 0:
+                final_x = canvas_w + left
+            else:
+                final_x = left
+            if top < 0:
+                final_y = canvas_h + top
+            else:
+                final_y = top
+
+        return final_x, final_y
 
     def _discover_user_roles(self) -> dict[str, dict[str, Any]]:
         roles: dict[str, dict[str, Any]] = {}
@@ -1965,32 +1997,48 @@ class ChuanHuaTongPlugin(Star):
             img = Image.open(path).convert("RGBA")
             fit_mode = str(layout.get("character_fit_mode", "fixed_width")).lower()
             align_bottom = layout.get("character_align_bottom", True)
-            
+
             # 根据 fit_mode 计算目标尺寸
             if fit_mode == "uniform_height":
-                # 统一高度模式
                 target_h = max(1, int(layout.get("character_uniform_height", 620)))
                 ratio = target_h / max(1, img.height)
                 target_w = max(1, int(img.width * ratio))
             else:
-                # 固定宽度模式（默认）
                 target_w = max(1, int(layout.get("character_width", 520)))
                 ratio = target_w / max(1, img.width)
                 target_h = max(1, int(img.height * ratio))
-            
+
             img = img.resize((target_w, target_h), Image.LANCZOS)
-            left = int(layout.get("character_left", 40))
-            
-            # 根据 align_bottom 计算垂直位置
+
+            anchor = layout.get("character_anchor", "left-top")
+            left_raw = int(layout.get("character_left", 40))
+
             if align_bottom:
-                # 底部对齐
-                bottom = int(layout.get("character_bottom", 0))
-                top = max(0, canvas.height - target_h - bottom)
+                bottom_raw = int(layout.get("character_bottom", 0))
+                # 底部对齐：bottom 是从画布底部往上的距离
+                if anchor == "center":
+                    final_x = canvas.width // 2 + left_raw
+                    final_y = canvas.height // 2 - target_h // 2 - bottom_raw
+                elif anchor == "right-bottom":
+                    final_x = canvas.width - target_w + left_raw
+                    final_y = canvas.height - target_h - bottom_raw
+                else:  # left-top
+                    final_x = canvas.width + left_raw if left_raw < 0 else left_raw
+                    final_y = canvas.height - target_h - bottom_raw if bottom_raw >= 0 else abs(bottom_raw)
             else:
+                top_raw = int(layout.get("character_top", 0))
                 # 顶部对齐
-                top = int(layout.get("character_top", 0))
-            
-            canvas.alpha_composite(img, (left, top))
+                if anchor == "center":
+                    final_x = canvas.width // 2 + left_raw
+                    final_y = canvas.height // 2 - target_h // 2 + top_raw
+                elif anchor == "right-bottom":
+                    final_x = canvas.width - target_w + left_raw
+                    final_y = canvas.height - target_h + top_raw
+                else:  # left-top
+                    final_x = canvas.width + left_raw if left_raw < 0 else left_raw
+                    final_y = canvas.height + top_raw if top_raw < 0 else top_raw
+
+            canvas.alpha_composite(img, (final_x, final_y))
         except Exception:
             logger.debug("[传话筒] 立绘渲染失败", exc_info=True)
 
@@ -2029,6 +2077,7 @@ class ChuanHuaTongPlugin(Star):
             y += line_height + line_gap
 
     def _draw_textbox_layer(self, canvas: Image.Image, layout: Dict[str, Any], text: str):
+        anchor = layout.get("box_anchor", "left-top")
         box_left = int(layout.get("box_left", 520))
         box_top = int(layout.get("box_top", 160))
         box_width = max(20, int(layout.get("box_width", 640)))
@@ -2037,13 +2086,24 @@ class ChuanHuaTongPlugin(Star):
         stroke_width = max(0, int(layout.get("text_stroke_width", 0)))
         stroke_color = self._hex_or_rgba(layout.get("text_stroke_color", "#000000"))
 
+        # 根据 anchor 计算最终位置
+        if anchor == "center":
+            final_left = canvas.width // 2 + box_left
+            final_top = canvas.height // 2 + box_top
+        elif anchor == "right-bottom":
+            final_left = canvas.width - box_width + box_left
+            final_top = canvas.height - box_height + box_top
+        else:  # left-top
+            final_left = canvas.width + box_left if box_left < 0 else box_left
+            final_top = canvas.height + box_top if box_top < 0 else box_top
+
         font = self._load_font(layout.get("font_size", 30), preferred=layout.get("body_font"))
         text_area_w = max(10, box_width - padding * 2)
         wrapped = self._wrap_text(text, font, max(10, text_area_w))
         spacing = max(0, int(font.size * (float(layout.get("line_height", 1.6)) - 1)))
         self._draw_rich_text(
             canvas,
-            (box_left + padding, box_top + padding),
+            (final_left + padding, final_top + padding),
             wrapped,
             font,
             self._hex_or_rgba(layout.get("text_color", "#FFFFFF")),
