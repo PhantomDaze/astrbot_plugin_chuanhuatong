@@ -159,5 +159,21 @@
     "default": "admin_or_group_admin",
     "options": ["admin", "admin_or_group_admin"],
     "hint": "控制开启/关闭传话筒的权限"
+  },
+
+  "box_anchor": {
+    "type": "string",
+    "description": "文本框锚点模式：left-top=左上角基准，center=画布中心偏移，right-bottom=右下角偏移",
+    "default": "left-top",
+    "options": ["left-top", "center", "right-bottom"],
+    "hint": "配合负值 left/top 可实现元素一半在画布外"
+  },
+
+  "character_anchor": {
+    "type": "string",
+    "description": "立绘锚点模式：left-top=左上角基准，center=画布中心偏移，right-bottom=右下角偏移",
+    "default": "left-top",
+    "options": ["left-top", "center", "right-bottom"],
+    "hint": "配合负值 left/bottom/top 可实现立绘一半在画布外"
   }
 }

@@ -1513,17 +1513,17 @@
       const canvasW = Number(l.canvas_width) || 1280;
       const canvasH = Number(l.canvas_height) || 720;
       const { width: charWidth, height: charHeight } = getCharacterDimensions();
-      const maxLeft = Math.max(0, canvasW - charWidth);
-      l.character_left = Math.min(Math.max(0, Number(l.character_left) || 0), maxLeft);
+      // 允许负值坐标，支持立绘一半在屏幕外
+      l.character_left = Number(l.character_left) || 0;
       characterHandle.style.left = l.character_left + 'px';
       if(l.character_align_bottom !== false) {
-        const maxBottom = Math.max(0, canvasH - charHeight);
-        l.character_bottom = Math.min(Math.max(0, Number(l.character_bottom) || 0), maxBottom);
+        // 允许负值 bottom，支持立绘一半在屏幕外
+        l.character_bottom = Number(l.character_bottom) || 0;
         characterHandle.style.bottom = l.character_bottom + 'px';
         characterHandle.style.top = 'auto';
       } else {
-        const maxTop = Math.max(0, canvasH - charHeight);
-        l.character_top = Math.min(Math.max(0, Number(l.character_top) || 0), maxTop);
+        // 允许负值 top，支持立绘一半在屏幕外
+        l.character_top = Number(l.character_top) || 0;
         characterHandle.style.top = l.character_top + 'px';
         characterHandle.style.bottom = 'auto';
       }
@@ -1975,14 +1975,10 @@
           l.box_width = Math.max(50, p.w + dx); l.box_height = Math.max(50, p.h + dy);
           break;
         case 'move-char': {
-          const canvasW = Number(l.canvas_width) || 1280;
-          const canvasH = Number(l.canvas_height) || 720;
-          const { width: charWidth, height: charHeight } = getCharacterDimensions();
-          const maxLeft = Math.max(0, canvasW - charWidth);
-          const maxBottom = Math.max(0, canvasH - charHeight);
-          l.character_left = Math.min(Math.max(0, p.x + dx), maxLeft);
+          // 允许负值坐标，支持立绘一半在屏幕外
+          l.character_left = p.x + dx;
           const newBottom = p.bottom - dy;
-          l.character_bottom = Math.min(Math.max(0, newBottom), maxBottom);
+          l.character_bottom = newBottom;
           break;
         }
         case 'resize-char': {
