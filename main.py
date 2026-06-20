@@ -8,6 +8,23 @@ import random
 import re
 import tempfile
 import unicodedata
+from pathlib import Path
+
+import yaml
+
+# Load metadata from metadata.yaml
+_META_PATH = Path(__file__).with_name("metadata.yaml")
+try:
+    with open(_META_PATH, "r", encoding="utf-8") as f:
+        _META = yaml.safe_load(f) or {}
+except Exception:
+    _META = {}
+
+_PLUGIN_ID = _META.get("name", "astrbot_plugin_chuanhuatong")
+_PLUGIN_AUTHOR = _META.get("author", "bvzrays")
+_PLUGIN_DESC = _META.get("desc", "传话筒：将 Bot 的文字回复渲染为 Gal 风立绘对话框")
+_PLUGIN_VERSION = str(_META.get("version", "2.4.2")).lstrip("vV")
+_PLUGIN_REPO = _META.get("repo", "https://github.com/bvzrays/astrbot_plugin_chuanhuatong")
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -44,11 +61,11 @@ class EmotionMeta:
 
 
 @register(
-    "astrbot_plugin_chuanhuatong",
-    "bvzrays",
-    "传话筒：将 Bot 的文字回复渲染为 Gal 风立绘对话框",
-    "2.3.0",
-    "https://github.com/bvzrays/astrbot_plugin_chuanhuatong",
+    _PLUGIN_ID,
+    _PLUGIN_AUTHOR,
+    _PLUGIN_DESC,
+    _PLUGIN_VERSION,
+    _PLUGIN_REPO,
 )
 class ChuanHuaTongPlugin(Star):
     """传话筒——拦截所有文本回复并渲染立绘对话框。"""
@@ -57,7 +74,7 @@ class ChuanHuaTongPlugin(Star):
     ROLE_AUTO = "__auto__"
     ROLE_BUILTIN = "__builtin__"
     ROLE_LEGACY = "__legacy__"
-    PLUGIN_ID = "astrbot_plugin_chuanhuatong"
+    PLUGIN_ID = _PLUGIN_ID
 
     DEFAULT_EMOTIONS: list[dict[str, Any]] = [
         {"key": "neutral", "folder": "shy", "label": "平静", "color": "#A9C5FF", "enabled": True},
@@ -287,6 +304,9 @@ class ChuanHuaTongPlugin(Star):
 
     def __init__(self, context: Context, config: Optional[AstrBotConfig] = None):
         super().__init__(context)
+        # ========================================================================
+        # SECTION: Initialization & Configuration
+        # ========================================================================
         self._cfg_obj: AstrBotConfig | dict | None = config
         self._base_dir = Path(__file__).resolve().parent
         self._bg_dir = self._base_dir / str(self.cfg().get("background_dir", "background"))
@@ -364,6 +384,10 @@ class ChuanHuaTongPlugin(Star):
                 layout["_persona_id"] = self._normalize_persona_ref(persona_id)
                 return layout
         return copy.deepcopy(self._layout_state)
+
+    # ========================================================================
+    # SECTION: Persona Management
+    # ========================================================================
 
     def _persona_preset_config_key(self) -> str:
         return "persona_preset_bindings"
@@ -676,6 +700,10 @@ class ChuanHuaTongPlugin(Star):
     def _persona_id_for_binding(self, persona_id: str) -> str:
         return self._normalize_persona_binding_id(persona_id)
 
+    # ========================================================================
+    # SECTION: Session Layout Management
+    # ========================================================================
+
     def _session_layout_file(self, session_id: str) -> Path:
         """获取会话布局文件路径"""
         import hashlib
@@ -718,6 +746,10 @@ class ChuanHuaTongPlugin(Star):
         layout_file = self._session_layout_file(session_id)
         return layout_file.exists()
 
+    # ========================================================================
+    # SECTION: Global Layout Management
+    # ========================================================================
+
     def _load_layout_state(self) -> Dict[str, Any]:
         if self._layout_file.exists():
             try:
@@ -746,6 +778,10 @@ class ChuanHuaTongPlugin(Star):
         normalized = self._normalize_layout(layout)
         self._layout_state = normalized
         self._save_layout_state(normalized)
+
+    # ========================================================================
+    # SECTION: Preset Management
+    # ========================================================================
 
     def _sanitize_preset_name(self, name: str) -> str:
         name = str(name or "").strip()
@@ -1017,6 +1053,10 @@ class ChuanHuaTongPlugin(Star):
         lines.append("使用 /切换预设 预设名称 即可切换。")
         return "\n".join(lines)
 
+    # ========================================================================
+    # SECTION: Permission & Whitelist
+    # ========================================================================
+
     @staticmethod
     def _is_event_admin(event: AstrMessageEvent) -> bool:
         checker = getattr(event, "is_admin", None)
@@ -1206,6 +1246,10 @@ class ChuanHuaTongPlugin(Star):
             else:
                 return False, "已在黑名单中，传话筒已禁用"
 
+    # ========================================================================
+    # SECTION: Layout Normalization
+    # ========================================================================
+
     def _normalize_layout(self, layout: Dict[str, Any]) -> Dict[str, Any]:
         data = copy.deepcopy(self.DEFAULT_LAYOUT)
         for key, value in (layout or {}).items():
@@ -1289,6 +1333,10 @@ class ChuanHuaTongPlugin(Star):
                 }
             )
         return normalized
+
+    # ========================================================================
+    # SECTION: Asset Discovery
+    # ========================================================================
 
     def _list_components(self) -> list[str]:
         names: Dict[str, Path] = {}
@@ -1451,6 +1499,10 @@ class ChuanHuaTongPlugin(Star):
             logger.debug("[传话筒] 列出背景分组失败", exc_info=True)
         return groups
 
+    # ========================================================================
+    # SECTION: Emotion Configuration
+    # ========================================================================
+
     def _read_emotion_file(self) -> Optional[list[dict[str, Any]]]:
         if not self._emotion_file.exists():
             return None
@@ -1565,6 +1617,10 @@ class ChuanHuaTongPlugin(Star):
             self._emotion_meta()
         return copy.deepcopy(self._emotion_records)
 
+    # ========================================================================
+    # SECTION: Text Processing
+    # ========================================================================
+
     def _remove_emotion_tags(self, text: str) -> str:
         """移除文本中的情绪标签（&xxx&格式），参考 meme_manager_lite 的实现"""
         if not text:
@@ -1641,6 +1697,10 @@ class ChuanHuaTongPlugin(Star):
         if not default_key or default_key not in mapping:
             default_key = next(iter(mapping.keys()))
         return (selected or default_key), cleaned
+
+    # ========================================================================
+    # SECTION: Asset Resolution
+    # ========================================================================
 
     def _file_to_data_url(self, file_path: Path) -> str:
         if not file_path.exists():
@@ -1886,6 +1946,10 @@ class ChuanHuaTongPlugin(Star):
         name = str(name or "传话筒").strip()
         return name or "传话筒"
 
+    # ========================================================================
+    # SECTION: Rendering Pipeline
+    # ========================================================================
+
     async def _render_with_fallback(
         self,
         text: str,
@@ -1896,7 +1960,7 @@ class ChuanHuaTongPlugin(Star):
         try:
             return await asyncio.to_thread(self._render_pillow_panel, text, emotion, session_id, persona_id)
         except Exception as exc:
-            logger.debug("[传话筒] Pillow 渲染失败: %s", exc, exc_info=True)
+            logger.error("[传话筒] Pillow 渲染异常: %s", exc, exc_info=True)
             return None
 
     def _cleanup_temp_file(self, path: Optional[str]):
@@ -1987,8 +2051,12 @@ class ChuanHuaTongPlugin(Star):
         quality = int(self.cfg().get("image_quality", 85) or 85)
         quality = max(1, min(100, quality))
         canvas.convert("RGB").save(tmp.name, format="JPEG", quality=quality, optimize=False)
-        
+
         return tmp.name
+
+    # ========================================================================
+    # SECTION: Pillow Drawing Helpers
+    # ========================================================================
 
     def _draw_character_layer(self, canvas: Image.Image, path: Optional[str], layout: Dict[str, Any]):
         if not path:
@@ -2196,6 +2264,10 @@ class ChuanHuaTongPlugin(Star):
             canvas.alpha_composite(img, (left, top))
         except Exception:
             logger.debug("[传话筒] 自定义组件渲染失败", exc_info=True)
+
+    # ========================================================================
+    # SECTION: Font & Text Utilities
+    # ========================================================================
 
     def _load_font(self, size: int, preferred: Optional[str] = None, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         font_path = str(self.cfg().get("font_path") or "").strip()
@@ -2421,6 +2493,10 @@ class ChuanHuaTongPlugin(Star):
             if current:
                 lines.append(current)
         return "\n".join(lines)
+
+    # ========================================================================
+    # SECTION: Text Splitting & Merging
+    # ========================================================================
 
     def _count_visible_chars(self, text: str) -> int:
         if not text:
@@ -2766,6 +2842,10 @@ class ChuanHuaTongPlugin(Star):
                 except Exception:
                     pass
 
+    # ========================================================================
+    # SECTION: Color Parsing
+    # ========================================================================
+
     def _parse_rgba(self, value: str) -> tuple[int, int, int, int]:
         value = (value or "").strip().lower()
         if value.startswith("rgba"):
@@ -2786,6 +2866,10 @@ class ChuanHuaTongPlugin(Star):
             return (r, g, b, 255)
         return (255, 255, 255, 255)
 
+    # ========================================================================
+    # SECTION: Message Chain Utilities
+    # ========================================================================
+
     def _chain_to_plain_text(self, chain: list[Any]) -> Optional[str]:
         if not chain:
             return None
@@ -2802,6 +2886,10 @@ class ChuanHuaTongPlugin(Star):
                 return None
         text = "".join(builder).strip()
         return text if text else None
+
+    # ========================================================================
+    # SECTION: WebUI Server
+    # ========================================================================
 
     async def _ensure_webui(self):
         if not self._cfg_bool("webui_enabled", True):
@@ -2841,8 +2929,18 @@ class ChuanHuaTongPlugin(Star):
             self._web_runner = web.AppRunner(app)
             await self._web_runner.setup()
             self._web_site = web.TCPSite(self._web_runner, host, port)
-            await self._web_site.start()
-            logger.info("[传话筒] WebUI 已启动: http://%s:%s", host, port)
+            try:
+                await self._web_site.start()
+                logger.info("[传话筒] WebUI 已启动: http://%s:%s", host, port)
+            except OSError as exc:
+                bind_errnos = {10048, 98, 48}  # Windows / Linux / macOS
+                if exc.errno in bind_errnos or getattr(exc, "winerror", None) in bind_errnos:
+                    logger.warning("[传话筒] WebUI 端口 %s 已被占用，跳过启动", port)
+                    self._web_site = None
+                    self._web_runner = None
+                    self._web_app = None
+                else:
+                    raise
 
     async def initialize(self):
         await self._ensure_webui()
@@ -2873,6 +2971,10 @@ class ChuanHuaTongPlugin(Star):
             provided = request.query["token"]
         if provided != token:
             raise web.HTTPUnauthorized(text=json.dumps({"message": "Token mismatch"}), content_type="application/json")
+
+    # ========================================================================
+    # SECTION: WebUI Handlers - Config & Layout
+    # ========================================================================
 
     async def _handle_web_index(self, request: web.Request):
         await self._authorize(request)
@@ -2963,6 +3065,10 @@ class ChuanHuaTongPlugin(Star):
         self._emotion_meta()  # 重新加载情绪配置
         return web.json_response({"ok": True, "layout": state})
 
+    # ========================================================================
+    # SECTION: WebUI Handlers - Presets
+    # ========================================================================
+
     async def _handle_list_presets_api(self, request: web.Request):
         await self._authorize(request)
         return web.json_response({"presets": self._list_presets()})
@@ -3017,6 +3123,10 @@ class ChuanHuaTongPlugin(Star):
             "presets": self._list_presets(),
             "character_roles": self._list_character_roles(),  # 刷新角色列表
         })
+
+    # ========================================================================
+    # SECTION: WebUI Handlers - Upload & Assets
+    # ========================================================================
 
     async def _handle_list_components_api(self, request: web.Request):
         await self._authorize(request)
@@ -3135,6 +3245,10 @@ class ChuanHuaTongPlugin(Star):
             content_type = "font/ttf"
         return web.FileResponse(path, headers={"Content-Type": content_type})
 
+    # ========================================================================
+    # SECTION: WebUI Handlers - Emotions
+    # ========================================================================
+
     async def _handle_save_emotions(self, request: web.Request):
         await self._authorize(request)
         try:
@@ -3163,6 +3277,10 @@ class ChuanHuaTongPlugin(Star):
             "ok": True,
             "emotion_sets": self._emotion_payload(),
         })
+
+    # ========================================================================
+    # SECTION: WebUI Handlers - Personas
+    # ========================================================================
 
     async def _handle_list_personas(self, request: web.Request):
         await self._authorize(request)
@@ -3215,6 +3333,10 @@ class ChuanHuaTongPlugin(Star):
             "bindings": self._persona_binding_records(),
         })
 
+    # ========================================================================
+    # SECTION: Core Event Handlers
+    # ========================================================================
+
     if hasattr(filter, "on_message"):
 
         @filter.on_message(priority=-10)  # 降低优先级，确保在其他插件之后处理
@@ -3237,6 +3359,10 @@ class ChuanHuaTongPlugin(Star):
         template = str(self.cfg().get("emotion_prompt_template", self.DEFAULT_PROMPT_TEMPLATE))
         instruction = template.replace("{tags}", ", ".join(tags))
         req.system_prompt = (req.system_prompt or "") + "\n" + instruction
+
+    # ========================================================================
+    # SECTION: Preset Commands
+    # ========================================================================
 
     def _switch_preset(self, target: str, session_id: Optional[str] = None) -> tuple[bool, str, Optional[str]]:
         """切换预设，如果提供了session_id则保存到会话配置，否则保存到全局配置"""
