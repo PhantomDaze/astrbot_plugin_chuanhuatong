@@ -15,6 +15,7 @@ class WebUIMixin:
     """Mixin providing the built-in WebUI server and API handlers."""
 
     WEB_INDEX_PATH: Path = Path()  # set in main
+    WEBUI_DIR: Path = Path()       # webui directory
 
     def _get_token(self) -> str:
         return str(self.cfg().get("webui_token", "")).strip()
@@ -110,6 +111,18 @@ class WebUIMixin:
         if not self.WEB_INDEX_PATH.exists():
             return web.Response(text="WebUI 索引缺失，请重新部署。", content_type="text/plain")
         return web.FileResponse(path=self.WEB_INDEX_PATH)
+
+    async def _handle_static_css(self, request: web.Request):
+        css_path = self.WEBUI_DIR / "styles.css"
+        if not css_path.exists():
+            return web.Response(status=404, text="styles.css not found")
+        return web.FileResponse(path=css_path, headers={"Content-Type": "text/css; charset=utf-8"})
+
+    async def _handle_static_js(self, request: web.Request):
+        js_path = self.WEBUI_DIR / "app.js"
+        if not js_path.exists():
+            return web.Response(status=404, text="app.js not found")
+        return web.FileResponse(path=js_path, headers={"Content-Type": "application/javascript; charset=utf-8"})
 
     async def _handle_get_layout(self, request: web.Request):
         await self._authorize(request)

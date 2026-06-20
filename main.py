@@ -83,6 +83,7 @@ class ChuanHuaTongPlugin(
     ROLE_LEGACY = "__legacy__"
 
     WEB_INDEX_PATH = Path(__file__).with_name("webui").joinpath("index.html")
+    WEBUI_DIR = Path(__file__).with_name("webui")
 
     DEFAULT_EMOTIONS = [
         {"key": "neutral", "folder": "shy", "label": "平静", "color": "#A9C5FF", "enabled": True},
