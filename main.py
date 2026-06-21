@@ -136,27 +136,12 @@ class ChuanHuaTongPlugin(
         self._session_layouts_dir = self._data_dir / "session_layouts"
         self._session_layouts_dir.mkdir(parents=True, exist_ok=True)
         self._emotion_file = self._data_dir / "emotion_sets.json"
-        self._whitelist_file = self._data_dir / "whitelist.json"
         self._layout_lock = asyncio.Lock()
         self._layout_state = self._load_layout_state()
 
-        # 内联同步白名单（避免 MRO 查找失败）
-        whitelist = self._load_whitelist()
-        changed = False
-        whitelist_users = str(self.cfg().get("whitelist_users", "") or "").strip()
-        if whitelist_users:
-            for uid in [u.strip() for u in whitelist_users.split(",") if u.strip()]:
-                if uid not in whitelist:
-                    whitelist.add(uid)
-                    changed = True
-        blacklist_users = str(self.cfg().get("blacklist_users", "") or "").strip()
-        if blacklist_users:
-            for uid in [u.strip() for u in blacklist_users.split(",") if u.strip()]:
-                if uid not in whitelist:
-                    whitelist.add(uid)
-                    changed = True
-        if changed:
-            self._save_whitelist(whitelist)
+        # 指令强制状态（内存，不持久化，优先级最高）
+        self._force_enabled_sessions: set[str] = set()
+        self._force_disabled_sessions: set[str] = set()
 
         self._web_runner: Optional[web.AppRunner] = None
         self._web_site: Optional[web.TCPSite] = None
