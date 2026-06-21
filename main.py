@@ -395,6 +395,13 @@ class ChuanHuaTongPlugin(
         if emotion_tag:
             event.set_extra("extracted_emotion_tag", emotion_tag)
 
+    def _debug_enabled(self) -> bool:
+        return self._cfg_bool("debug", False)
+
+    def _debug_log(self, msg: str, *args):
+        if self._debug_enabled():
+            logger.info(msg, *args)
+
     @filter.on_decorating_result(priority=-10)
     async def on_decorating_result(self, event: AstrMessageEvent):
         import astrbot.api.message_components as Comp
@@ -406,56 +413,56 @@ class ChuanHuaTongPlugin(
 
         session_id = event.unified_msg_origin
         persona_id = await self._resolve_current_persona_id(event, None)
-        logger.info("[传话筒][DIAG] ========== on_decorating_result 触发 ==========")
-        logger.info("[传话筒][DIAG] 会话: %s, 人格: %s", session_id, persona_id)
+        self._debug_log("[传话筒][DIAG] ========== on_decorating_result 触发 ==========")
+        self._debug_log("[传话筒][DIAG] 会话: %s, 人格: %s", session_id, persona_id)
 
         result = event.get_result()
         if not result:
-            logger.info("[传话筒][DIAG] 步骤1: 未获取到结果对象 → 直接返回")
+            self._debug_log("[传话筒][DIAG] 步骤1: 未获取到结果对象 → 直接返回")
             return
         chain = result.chain
         if not chain:
-            logger.info("[传话筒][DIAG] 步骤2: 消息链为空 → 直接返回")
+            self._debug_log("[传话筒][DIAG] 步骤2: 消息链为空 → 直接返回")
             return
 
-        logger.info("[传话筒][DIAG] 步骤3: 消息链长度: %s", len(chain))
+        self._debug_log("[传话筒][DIAG] 步骤3: 消息链长度: %s", len(chain))
 
         plain_text = self._chain_to_plain_text(chain)
         has_non_text = plain_text is None
         raw_text_parts = [plain_text] if plain_text else []
 
-        logger.info("[传话筒][DIAG] 步骤4: 消息链分析 → has_non_text=%s, raw_text_parts=%s", has_non_text, len(raw_text_parts))
+        self._debug_log("[传话筒][DIAG] 步骤4: 消息链分析 → has_non_text=%s, raw_text_parts=%s", has_non_text, len(raw_text_parts))
         if plain_text:
-            logger.info("[传话筒][DIAG] 步骤4详情: 提取的纯文本长度=%s, 内容预览='%s'", len(plain_text), plain_text[:100])
+            self._debug_log("[传话筒][DIAG] 步骤4详情: 提取的纯文本长度=%s, 内容预览='%s'", len(plain_text), plain_text[:100])
 
         resp = event.get_extra("llm_resp")
         resp_obj = resp if isinstance(resp, LLMResponse) else None
 
         if not self._cfg_bool("enable_render", True):
-            logger.info("[传话筒][DIAG] 步骤5: enable_render=false → 直接返回")
+            self._debug_log("[传话筒][DIAG] 步骤5: enable_render=false → 直接返回")
             return
-        logger.info("[传话筒][DIAG] 步骤5: enable_render=true → 通过")
+        self._debug_log("[传话筒][DIAG] 步骤5: enable_render=true → 通过")
 
         if not self._is_session_enabled(event):
-            logger.info("[传话筒][DIAG] 步骤6: 会话未启用（黑白名单）→ 直接返回")
+            self._debug_log("[传话筒][DIAG] 步骤6: 会话未启用（黑白名单）→ 直接返回")
             return
-        logger.info("[传话筒][DIAG] 步骤6: 会话已启用 → 通过")
+        self._debug_log("[传话筒][DIAG] 步骤6: 会话已启用 → 通过")
 
         render_scope = str(self.cfg().get("render_scope", "llm_only")).lower()
         allow_non_llm = render_scope == "all_text"
-        logger.info("[传话筒][DIAG] 步骤7: render_scope=%s, allow_non_llm=%s", render_scope, allow_non_llm)
+        self._debug_log("[传话筒][DIAG] 步骤7: render_scope=%s, allow_non_llm=%s", render_scope, allow_non_llm)
 
         if resp_obj is None and not allow_non_llm:
-            logger.info("[传话筒][DIAG] 步骤8: 无LLM响应且不允许非LLM → 直接返回")
+            self._debug_log("[传话筒][DIAG] 步骤8: 无LLM响应且不允许非LLM → 直接返回")
             return
-        logger.info("[传话筒][DIAG] 步骤8: LLM响应检查通过 (resp_obj=%s)", resp_obj is not None)
+        self._debug_log("[传话筒][DIAG] 步骤8: LLM响应检查通过 (resp_obj=%s)", resp_obj is not None)
 
         if not has_non_text and raw_text_parts:
-            logger.info("[传话筒][DIAG] 步骤9: 进入纯文本渲染分支")
+            self._debug_log("[传话筒][DIAG] 步骤9: 进入纯文本渲染分支")
             raw_full_text = "".join(raw_text_parts)
             emotion = event.get_extra("extracted_emotion_tag")
             full_text = raw_full_text.strip()
-            logger.info("[传话筒][DIAG] 步骤9详情: 原始长度=%s, 清洗后长度=%s, 情绪=%s", len(raw_full_text), len(full_text), emotion)
+            self._debug_log("[传话筒][DIAG] 步骤9详情: 原始长度=%s, 清洗后长度=%s, 情绪=%s", len(raw_full_text), len(full_text), emotion)
             if full_text:
                 if resp_obj is not None:
                     await self._update_conversation_history(event, full_text)
@@ -465,46 +472,46 @@ class ChuanHuaTongPlugin(
                 split_page_limit = int(self.cfg().get("split_page_char_limit", 200) or 0)
                 if split_page_limit <= 0:
                     split_page_limit = 200
-                logger.info("[传话筒][DIAG] 步骤10: render_char_threshold=%s, split_long_text=%s, split_page_char_limit=%s", char_limit, enable_split, split_page_limit)
+                self._debug_log("[传话筒][DIAG] 步骤10: render_char_threshold=%s, split_long_text=%s, split_page_char_limit=%s", char_limit, enable_split, split_page_limit)
 
                 if enable_split:
                     text_len = self._count_visible_chars(full_text)
-                    logger.info("[传话筒][DIAG] 步骤11: 可见字符数=%s, split_page_char_limit=%s, 是否超限=%s", text_len, split_page_limit, text_len > split_page_limit)
+                    self._debug_log("[传话筒][DIAG] 步骤11: 可见字符数=%s, split_page_char_limit=%s, 是否超限=%s", text_len, split_page_limit, text_len > split_page_limit)
                     if text_len > split_page_limit:
-                        logger.info("[传话筒][DIAG] 步骤12: 触发分割渲染 → 调用 _render_split_text")
+                        self._debug_log("[传话筒][DIAG] 步骤12: 触发分割渲染 → 调用 _render_split_text")
                         success = await self._render_split_text(full_text, emotion, event, session_id, persona_id)
                         if success:
                             result.chain = []
-                            logger.info("[传话筒][DIAG] 步骤13: 分割渲染成功 → 返回")
+                            self._debug_log("[传话筒][DIAG] 步骤13: 分割渲染成功 → 返回")
                             return
-                        logger.info("[传话筒][DIAG] 步骤13: 分割渲染失败 → 返回")
+                        self._debug_log("[传话筒][DIAG] 步骤13: 分割渲染失败 → 返回")
                         return
                     else:
-                        logger.info("[传话筒][DIAG] 步骤12: 文本未超 split_page_char_limit → 进入单图渲染")
+                        self._debug_log("[传话筒][DIAG] 步骤12: 文本未超 split_page_char_limit → 进入单图渲染")
                 elif char_limit > 0:
                     text_len = self._count_visible_chars(full_text)
-                    logger.info("[传话筒][DIAG] 步骤11: 可见字符数=%s, 阈值=%s, 是否超限=%s", text_len, char_limit, text_len > char_limit)
+                    self._debug_log("[传话筒][DIAG] 步骤11: 可见字符数=%s, 阈值=%s, 是否超限=%s", text_len, char_limit, text_len > char_limit)
                     if text_len > char_limit:
-                        logger.info("[传话筒][DIAG] 步骤12: split_long_text=false → 跳过渲染，直接返回")
+                        self._debug_log("[传话筒][DIAG] 步骤12: split_long_text=false → 跳过渲染，直接返回")
                         return
 
-                logger.info("[传话筒][DIAG] 步骤12: 未触发分割 → 进入单图渲染")
+                self._debug_log("[传话筒][DIAG] 步骤12: 未触发分割 → 进入单图渲染")
                 image_path = await self._render_with_fallback(full_text, emotion, session_id, persona_id)
                 if image_path:
                     try:
                         result.chain = [Comp.Image.fromFileSystem(image_path)]
                         self._schedule_cleanup(image_path, delay=90.0)
-                        logger.info("[传话筒][DIAG] 步骤13: 单图渲染成功")
+                        self._debug_log("[传话筒][DIAG] 步骤13: 单图渲染成功")
                     except Exception as exc:
                         logger.error("[传话筒][DIAG] 步骤13: 单图渲染异常: %s", exc, exc_info=True)
                 else:
-                    logger.info("[传话筒][DIAG] 步骤13: 单图渲染失败（无image_path）")
+                    self._debug_log("[传话筒][DIAG] 步骤13: 单图渲染失败（无image_path）")
             else:
-                logger.info("[传话筒][DIAG] 步骤9: full_text 为空 → 跳过渲染")
+                self._debug_log("[传话筒][DIAG] 步骤9: full_text 为空 → 跳过渲染")
         else:
-            logger.info("[传话筒][DIAG] 步骤9: has_non_text=%s 或 raw_text_parts为空 → 跳过渲染分支", has_non_text)
+            self._debug_log("[传话筒][DIAG] 步骤9: has_non_text=%s 或 raw_text_parts为空 → 跳过渲染分支", has_non_text)
 
-        logger.info("[传话筒][DIAG] ========== on_decorating_result 结束 ==========")
+        self._debug_log("[传话筒][DIAG] ========== on_decorating_result 结束 ==========")
 
     # ========================================================================
     # Control commands
