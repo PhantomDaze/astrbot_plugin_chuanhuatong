@@ -49,6 +49,8 @@ class WebUIMixin:
             app.add_routes(
                 [
                     web.get("/", self._handle_web_index),
+                    web.get("/styles.css", self._handle_static_css),
+                    web.get("/app.js", self._handle_static_js),
                     web.get("/api/config", self._handle_get_layout),
                     web.post("/api/config", self._handle_update_layout),
                     web.post("/api/layout/reset", self._handle_reset_layout),

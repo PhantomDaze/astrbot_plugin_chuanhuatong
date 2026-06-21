@@ -23,6 +23,12 @@
     "default": false
   },
 
+  "split_page_char_limit": {
+    "type": "int",
+    "description": "分割渲染时每页文本长度上限（默认200字符）",
+    "default": 200
+  },
+
   "merge_split_images": {
     "type": "bool",
     "description": "合并分割渲染的图片为一张（需启用超长文本智能分割渲染）",
